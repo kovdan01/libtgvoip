@@ -131,11 +131,11 @@ public:
     static void setGlobalServerConfig(std::string const &serverConfig);
     static int getConnectionMaxLayer();
     static std::string getVersion();
-    static std::unique_ptr<TgVoip> makeInstance(
+    static TgVoip* makeInstance(
         TgVoipConfig const &config,
         TgVoipPersistentState const &persistentState,
         std::vector<TgVoipEndpoint> const &endpoints,
-        TgVoipProxy const *proxy,
+        std::unique_ptr<TgVoipProxy> const &proxy,
         TgVoipNetworkType initialNetworkType,
         TgVoipEncryptionKey const &encryptionKey
 #ifdef TGVOIP_USE_CUSTOM_CRYPTO
