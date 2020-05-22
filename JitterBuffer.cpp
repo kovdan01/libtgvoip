@@ -225,14 +225,6 @@ JitterBuffer::Status JitterBuffer::GetInternal(jitter_packet_t* pkt, std::uint32
         LOGW("jitter: lost %d packets in a row, resetting", m_lostCount);
         m_dontIncDelay = 16;
         m_dontDecDelay += 128;
-        std::uint32_t currentDelay = GetCurrentDelayNonBlocking();
-        if (currentDelay < m_delay)
-        {
-            if ((m_delay - currentDelay) * m_step < m_nextTimestamp)
-                m_nextTimestamp -= (m_delay - currentDelay) * m_step;
-            else
-                m_nextTimestamp = 0;
-        }
         m_lostCount = 0;
         ResetNonBlocking();
     }
