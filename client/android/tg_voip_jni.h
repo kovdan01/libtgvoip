@@ -8,11 +8,12 @@
 #include <jni.h>
 
 #ifdef __cplusplus
-extern "C"{
+extern "C"
+{
 #endif
-void tgvoipRegisterNatives(JNIEnv* env);
+    void tgvoipRegisterNatives(JNIEnv* env);
 #ifdef __cplusplus
 }
 #endif
 
-#endif //TELEGRAM_TG_VOIP_JNI_H
+#endif // TELEGRAM_TG_VOIP_JNI_H

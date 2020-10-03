@@ -13,32 +13,57 @@
 using namespace tgvoip;
 using namespace tgvoip::video;
 
-std::shared_ptr<VideoSource> VideoSource::Create(){
+std::shared_ptr<VideoSource> VideoSource::Create()
+{
 #ifdef __ANDROID__
-	//return std::make_shared<VideoSourceAndroid>();
-	return nullptr;
+    //return std::make_shared<VideoSourceAndroid>();
+    return nullptr;
 #endif
-	return nullptr;
+    return nullptr;
 }
 
-
-void VideoSource::SetCallback(std::function<void(const Buffer &, uint32_t)> callback){
-	this->callback=callback;
+void VideoSource::SetCallback(CallbackType callback)
+{
+    m_callback = std::move(callback);
+}
+void VideoSource::SetStreamStateCallback(std::function<void(bool)> callback)
+{
+    m_streamStateCallback = std::move(callback);
 }
 
-bool VideoSource::Failed(){
-	return failed;
+bool VideoSource::Failed() const
+{
+    return m_failed;
 }
 
-std::string VideoSource::GetErrorDescription(){
-	return error;
+std::string VideoSource::GetErrorDescription() const
+{
+    return m_error;
 }
 
-std::vector<uint32_t> VideoSource::GetAvailableEncoders(){
+std::vector<Buffer>& VideoSource::GetCodecSpecificData()
+{
+    return m_csd;
+}
+unsigned int VideoSource::GetFrameWidth() const
+{
+    return m_width;
+}
+unsigned int VideoSource::GetFrameHeight() const
+{
+    return m_height;
+}
+void VideoSource::SetRotation(unsigned int rotation)
+{
+    m_rotation = rotation;
+}
+
+std::vector<std::uint32_t> VideoSource::GetAvailableEncoders()
+{
 #ifdef __ANDROID__
-	return VideoSourceAndroid::availableEncoders;
+    return VideoSourceAndroid::availableEncoders;
 #elif defined(__APPLE__) && !defined(TARGET_OSX)
-	return VideoToolboxEncoderSource::GetAvailableEncoders();
+    return VideoToolboxEncoderSource::GetAvailableEncoders();
 #endif
-	return std::vector<uint32_t>();
+    return std::vector<std::uint32_t>();
 }

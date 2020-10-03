@@ -5,206 +5,207 @@
 #ifndef LIBTGVOIP_NETWORKSOCKET_H
 #define LIBTGVOIP_NETWORKSOCKET_H
 
-#include <stdint.h>
+#include "Buffers.h"
+#include "utils.h"
+#include <atomic>
+#include <memory>
+#include <cstdint>
 #include <string>
 #include <vector>
-#include "utils.h"
+#include <list>
 
-namespace tgvoip {
+namespace tgvoip
+{
 
-	enum NetworkProtocol{
-		PROTO_UDP=0,
-		PROTO_TCP
-	};
+enum class NetworkProtocol
+{
+    UDP = 0,
+    TCP
+};
 
-	struct TCPO2State{
-		unsigned char key[32];
-		unsigned char iv[16];
-		unsigned char ecount[16];
-		uint32_t num;
-	};
+struct TCPO2State
+{
+    std::uint8_t key[32];
+    std::uint8_t iv[16];
+    std::uint8_t ecount[16];
+    std::uint32_t num;
+};
 
-	class NetworkAddress{
-	public:
-		virtual std::string ToString() const =0;
-		bool operator==(const NetworkAddress& other) const;
-		bool operator!=(const NetworkAddress& other) const;
-		virtual ~NetworkAddress()=default;
-		virtual bool IsEmpty() const =0;
-		virtual bool PrefixMatches(const unsigned int prefix, const NetworkAddress& other) const =0;
-	};
+class NetworkAddress
+{
+public:
+    virtual ~NetworkAddress() = default;
 
-	class IPv4Address : public NetworkAddress{
-	public:
-		IPv4Address(std::string addr);
-		IPv4Address(uint32_t addr);
-		IPv4Address();
-		virtual std::string ToString() const override;
-		uint32_t GetAddress() const;
-		virtual bool IsEmpty() const override;
-		virtual bool PrefixMatches(const unsigned int prefix, const NetworkAddress& other) const override;
+    [[nodiscard]] virtual std::string ToString() const;
+    [[nodiscard]] virtual bool IsEmpty() const;
+    [[nodiscard]] virtual bool PrefixMatches(const unsigned int prefix, const NetworkAddress& other) const;
 
-		static const IPv4Address Broadcast(){
-			return IPv4Address(0xFFFFFFFF);
-		}
-	private:
-		uint32_t address;
-	};
+    bool operator==(const NetworkAddress& other) const;
+    bool operator!=(const NetworkAddress& other) const;
 
-	class IPv6Address : public NetworkAddress{
-	public:
-		IPv6Address(std::string addr);
-		IPv6Address(const uint8_t* addr);
-		IPv6Address();
-		virtual std::string ToString() const override;
-		const uint8_t* GetAddress() const;
-		virtual bool IsEmpty() const override;
-		virtual bool PrefixMatches(const unsigned int prefix, const NetworkAddress& other) const override;
-	private:
-		uint8_t address[16];
-	};
+    static NetworkAddress Empty();
+    static NetworkAddress IPv4(const std::string& str);
+    static NetworkAddress IPv4(std::uint32_t addr);
+    static NetworkAddress IPv6(const std::string& str);
+    static NetworkAddress IPv6(const std::uint8_t addr[16]);
 
-	struct NetworkPacket{
-		unsigned char* data;
-		size_t length;
-		NetworkAddress* address;
-		uint16_t port;
-		NetworkProtocol protocol;
-	};
-	typedef struct NetworkPacket NetworkPacket;
+    union
+    {
+        std::uint32_t ipv4;
+        std::uint8_t ipv6[16];
+    } addr;
+    bool isIPv6 = false;
 
-	class SocketSelectCanceller{
-	public:
-		virtual ~SocketSelectCanceller();
-		virtual void CancelSelect()=0;
-		static SocketSelectCanceller* Create();
-	};
+private:
+    NetworkAddress();
+};
 
-	class NetworkSocket{
-	public:
-		friend class NetworkSocketPosix;
-		friend class NetworkSocketWinsock;
+struct NetworkPacket
+{
+    NetworkPacket(Buffer data, const NetworkAddress& address, std::uint16_t port, NetworkProtocol protocol);
+    TGVOIP_MOVE_ONLY(NetworkPacket);
 
-		TGVOIP_DISALLOW_COPY_AND_ASSIGN(NetworkSocket);
-		NetworkSocket(NetworkProtocol protocol);
-		virtual ~NetworkSocket();
-		virtual void Send(NetworkPacket* packet)=0;
-		virtual void Receive(NetworkPacket* packet)=0;
-		size_t Receive(unsigned char* buffer, size_t len);
-		size_t Send(unsigned char* buffer, size_t len);
-		virtual void Open()=0;
-		virtual void Close()=0;
-		virtual uint16_t GetLocalPort(){ return 0; };
-		virtual void Connect(const NetworkAddress* address, uint16_t port)=0;
-		virtual std::string GetLocalInterfaceInfo(IPv4Address* inet4addr, IPv6Address* inet6addr);
-		virtual void OnActiveInterfaceChanged(){};
-		virtual NetworkAddress* GetConnectedAddress(){ return NULL; };
-		virtual uint16_t GetConnectedPort(){ return 0; };
-		virtual void SetTimeouts(int sendTimeout, int recvTimeout){};
+    Buffer data;
+    NetworkAddress address;
+    NetworkProtocol protocol;
+    std::uint16_t port;
 
-		virtual bool IsFailed();
-		virtual bool IsReadyToSend(){
-			return readyToSend;
-		}
-		virtual bool OnReadyToSend(){ readyToSend=true; return true; };
-		virtual bool OnReadyToReceive(){ return true; };
-		void SetTimeout(double timeout){
-			this->timeout=timeout;
-		};
+    static NetworkPacket Empty();
+    [[nodiscard]] bool IsEmpty() const;
+};
 
-		static NetworkSocket* Create(NetworkProtocol protocol);
-		static IPv4Address* ResolveDomainName(std::string name);
-		static bool Select(std::vector<NetworkSocket*>& readFds, std::vector<NetworkSocket*>& writeFds, std::vector<NetworkSocket*>& errorFds, SocketSelectCanceller* canceller);
+class SocketSelectCanceller
+{
+public:
+    virtual ~SocketSelectCanceller();
+    virtual void CancelSelect() = 0;
+    static SocketSelectCanceller* Create();
+};
 
-	protected:
-		virtual uint16_t GenerateLocalPort();
-		virtual void SetMaxPriority();
+class NetworkSocket
+{
+public:
+    friend class NetworkSocketPosix;
+    friend class NetworkSocketWinsock;
 
-		static void GenerateTCPO2States(unsigned char* buffer, TCPO2State* recvState, TCPO2State* sendState);
-		static void EncryptForTCPO2(unsigned char* buffer, size_t len, TCPO2State* state);
-		double ipv6Timeout;
-		unsigned char nat64Prefix[12];
-		bool failed;
-		bool readyToSend=false;
-		double lastSuccessfulOperationTime=0.0;
-		double timeout=0.0;
-		NetworkProtocol protocol;
-	};
+    TGVOIP_DISALLOW_COPY_AND_ASSIGN(NetworkSocket);
+    NetworkSocket(NetworkProtocol m_protocol);
+    virtual ~NetworkSocket();
+    virtual void Send(NetworkPacket packet) = 0;
+    virtual NetworkPacket Receive(std::size_t maxLen) = 0;
+    std::size_t Receive(std::uint8_t* buffer, std::size_t len);
+    virtual void Open() = 0;
+    virtual void Close() = 0;
+    virtual std::uint16_t GetLocalPort();
+    virtual void Connect(const NetworkAddress& address, std::uint16_t port) = 0;
+    virtual std::string GetLocalInterfaceInfo(NetworkAddress* inet4addr, NetworkAddress* inet6addr);
+    virtual void OnActiveInterfaceChanged();
+    virtual NetworkAddress GetConnectedAddress();
+    virtual std::uint16_t GetConnectedPort();
+    virtual void SetTimeouts(int sendTimeout, int recvTimeout);
 
-	class NetworkSocketWrapper : public NetworkSocket{
-	public:
-		NetworkSocketWrapper(NetworkProtocol protocol) : NetworkSocket(protocol){};
-		virtual ~NetworkSocketWrapper(){};
-		virtual NetworkSocket* GetWrapped()=0;
-		virtual void InitConnection()=0;
-		virtual void SetNonBlocking(bool){};
-	};
+    [[nodiscard]] virtual bool IsFailed() const;
+    [[nodiscard]] virtual bool IsReadyToSend() const;
+    virtual bool OnReadyToSend();
+    virtual bool OnReadyToReceive();
+    void SetTimeout(double timeout);
 
-	class NetworkSocketTCPObfuscated : public NetworkSocketWrapper{
-	public:
-		NetworkSocketTCPObfuscated(NetworkSocket* wrapped);
-		virtual ~NetworkSocketTCPObfuscated();
-		virtual NetworkSocket* GetWrapped();
-		virtual void InitConnection();
-		virtual void Send(NetworkPacket *packet);
-		virtual void Receive(NetworkPacket *packet);
-		virtual void Open();
-		virtual void Close();
-		virtual void Connect(const NetworkAddress *address, uint16_t port);
-		virtual bool OnReadyToSend();
+    static NetworkSocket* Create(NetworkProtocol m_protocol);
+    static NetworkAddress ResolveDomainName(const std::string& name);
+    static bool Select(std::list<NetworkSocket*>& readFds, std::list<NetworkSocket*>& writeFds,
+                       std::list<NetworkSocket*>& errorFds, SocketSelectCanceller* canceller);
 
-		virtual bool IsFailed();
-		virtual bool IsReadyToSend(){
-			return readyToSend && wrapped->IsReadyToSend();
-		};
+protected:
+    virtual std::uint16_t GenerateLocalPort();
+    virtual void SetMaxPriority();
 
-	private:
-		NetworkSocket* wrapped;
-		TCPO2State recvState;
-		TCPO2State sendState;
-		bool initialized=false;
-	};
+    static void GenerateTCPO2States(std::uint8_t* buffer, TCPO2State* recvState, TCPO2State* sendState);
+    static void EncryptForTCPO2(std::uint8_t* buffer, std::size_t len, TCPO2State* state);
 
-	class NetworkSocketSOCKS5Proxy : public NetworkSocketWrapper{
-	public:
-		NetworkSocketSOCKS5Proxy(NetworkSocket* tcp, NetworkSocket* udp, std::string username, std::string password);
-		virtual ~NetworkSocketSOCKS5Proxy();
-		virtual void Send(NetworkPacket *packet);
-		virtual void Receive(NetworkPacket *packet);
-		virtual void Open();
-		virtual void Close();
-		virtual void Connect(const NetworkAddress *address, uint16_t port);
-		virtual NetworkSocket *GetWrapped();
-		virtual void InitConnection();
-		virtual bool IsFailed();
-		virtual NetworkAddress *GetConnectedAddress();
-		virtual uint16_t GetConnectedPort();
-		virtual bool OnReadyToSend();
-		virtual bool OnReadyToReceive();
-		
-		bool NeedSelectForSending();
+    double m_ipv6Timeout;
+    double m_lastSuccessfulOperationTime = 0.0;
+    double m_timeout = 0.0;
+    NetworkProtocol m_protocol;
+    std::uint8_t m_nat64Prefix[12];
+    std::atomic<bool> m_failed;
+    bool m_readyToSend = false;
+};
 
-	private:
-		void SendConnectionCommand();
-		enum ConnectionState{
-			Initial,
-			WaitingForAuthMethod,
-			WaitingForAuthResult,
-			WaitingForCommandResult,
-			Connected
-		};
-		NetworkSocket* tcp;
-		NetworkSocket* udp;
-		std::string username;
-		std::string password;
-		NetworkAddress* connectedAddress;
-		uint16_t connectedPort;
-		ConnectionState state=ConnectionState::Initial;
+class NetworkSocketWrapper : public NetworkSocket
+{
+public:
+    NetworkSocketWrapper(NetworkProtocol protocol);
+    ~NetworkSocketWrapper() override;
+    virtual NetworkSocket* GetWrapped() = 0;
+    virtual void InitConnection() = 0;
+    virtual void SetNonBlocking(bool);
+};
 
-		IPv4Address lastRecvdV4;
-		IPv6Address lastRecvdV6;
-	};
+class NetworkSocketTCPObfuscated : public NetworkSocketWrapper
+{
+public:
+    NetworkSocketTCPObfuscated(NetworkSocket* m_wrapped);
+    ~NetworkSocketTCPObfuscated() override;
+    NetworkSocket* GetWrapped() override;
+    void InitConnection() override;
+    void Send(NetworkPacket packet) override;
+    NetworkPacket Receive(std::size_t maxLen) override;
+    void Open() override;
+    void Close() override;
+    void Connect(const NetworkAddress& address, std::uint16_t port) override;
+    bool OnReadyToSend() override;
 
-}
+    [[nodiscard]] bool IsFailed() const override;
+    [[nodiscard]] bool IsReadyToSend() const override;
 
-#endif //LIBTGVOIP_NETWORKSOCKET_H
+private:
+    NetworkSocket* m_wrapped;
+    TCPO2State m_recvState;
+    TCPO2State m_sendState;
+    bool m_initialized = false;
+};
+
+class NetworkSocketSOCKS5Proxy : public NetworkSocketWrapper
+{
+public:
+    NetworkSocketSOCKS5Proxy(NetworkSocket* m_tcp, NetworkSocket* m_udp, std::string m_username, std::string m_password);
+    ~NetworkSocketSOCKS5Proxy() override;
+    void Send(NetworkPacket packet) override;
+    NetworkPacket Receive(std::size_t maxLen) override;
+    void Open() override;
+    void Close() override;
+    void Connect(const NetworkAddress& address, std::uint16_t port) override;
+    NetworkSocket* GetWrapped() override;
+    void InitConnection() override;
+    NetworkAddress GetConnectedAddress() override;
+    std::uint16_t GetConnectedPort() override;
+    bool OnReadyToSend() override;
+    bool OnReadyToReceive() override;
+
+    [[nodiscard]] bool IsFailed() const override;
+    [[nodiscard]] bool NeedSelectForSending() const;
+
+private:
+    enum class ConnectionState
+    {
+        INITIAL,
+        WAITING_FOR_AUTH_METHOD,
+        WAITING_FOR_AUTH_RESULT,
+        WAITING_FOR_COMMAND_RESULT,
+        CONNECTED,
+    };
+
+    NetworkSocket* m_tcp;
+    NetworkSocket* m_udp;
+    std::string m_username;
+    std::string m_password;
+    NetworkAddress m_connectedAddress = NetworkAddress::Empty();
+    ConnectionState m_state = ConnectionState::INITIAL;
+    std::uint16_t m_connectedPort = 0;
+
+    void SendConnectionCommand();
+};
+
+} // namespace tgvoip
+
+#endif // LIBTGVOIP_NETWORKSOCKET_H

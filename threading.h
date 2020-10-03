@@ -4,351 +4,292 @@
 // you should have received with this source code distribution.
 //
 
-#ifndef __THREADING_H
-#define __THREADING_H
+#ifndef THREADING_H
+#define THREADING_H
+
+#include "utils.h"
 
 #include <functional>
 
 #if defined(_POSIX_THREADS) || defined(_POSIX_VERSION) || defined(__unix__) || defined(__unix) || (defined(__APPLE__) && defined(__MACH__))
 
 #include <pthread.h>
-#include <semaphore.h>
 #include <sched.h>
+#include <semaphore.h>
 #include <unistd.h>
 #ifdef __APPLE__
 #include "os/darwin/DarwinSpecific.h"
 #endif
 
-namespace tgvoip{
-	class Mutex{
-	public:
-		Mutex(){
-			pthread_mutex_init(&mtx, NULL);
-		}
+namespace tgvoip
+{
 
-		~Mutex(){
-			pthread_mutex_destroy(&mtx);
-		}
+class Mutex
+{
+public:
+    Mutex();
+    TGVOIP_DISALLOW_COPY_AND_ASSIGN(Mutex);
+    ~Mutex();
+    void Lock();
+    void Unlock();
+    pthread_mutex_t* NativeHandle();
 
-		void Lock(){
-			pthread_mutex_lock(&mtx);
-		}
+private:
+    pthread_mutex_t m_mutex;
+};
 
-		void Unlock(){
-			pthread_mutex_unlock(&mtx);
-		}
+class Thread
+{
+public:
+    Thread(std::function<void()> entry);
+    virtual ~Thread();
 
-		pthread_mutex_t* NativeHandle(){
-			return &mtx;
-		}
+    void Start();
+    void Join();
+    void SetName(const char* name);
+    void SetMaxPriority();
+    bool IsCurrent();
+    static void Sleep(double seconds);
 
-	private:
-		Mutex(const Mutex& other);
-		pthread_mutex_t mtx;
-	};
-
-	class Thread{
-	public:
-		Thread(std::function<void()> entry) : entry(entry){
-			name=NULL;
-			thread=0;
-		}
-
-		virtual ~Thread(){
-
-		}
-
-		void Start(){
-			if(pthread_create(&thread, NULL, Thread::ActualEntryPoint, this)==0){
-				valid=true;
-			}
-		}
-
-		void Join(){
-			if(valid)
-				pthread_join(thread, NULL);
-		}
-
-		void SetName(const char* name){
-			this->name=name;
-		}
-
-
-		void SetMaxPriority(){
+private:
+    static void* ActualEntryPoint(void* arg);
+    std::function<void()> m_entry;
+    pthread_t m_thread = 0;
+    const char* m_name = nullptr;
 #ifdef __APPLE__
-			maxPriority=true;
+    bool m_maxPriority = false;
 #endif
-		}
+    bool m_valid = false;
+};
 
-		static void Sleep(double seconds){
-			usleep((useconds_t)(seconds*1000000.0));
-		}
-
-		bool IsCurrent(){
-			return pthread_equal(thread, pthread_self())!=0;
-		}
-
-	private:
-		static void* ActualEntryPoint(void* arg){
-			Thread* self=reinterpret_cast<Thread*>(arg);
-			if(self->name){
-#if !defined(__APPLE__) && !defined(__gnu_hurd__)
-				pthread_setname_np(self->thread, self->name);
-#elif !defined(__gnu_hurd__)
-				pthread_setname_np(self->name);
-				if(self->maxPriority){
-					DarwinSpecific::SetCurrentThreadPriority(DarwinSpecific::THREAD_PRIO_USER_INTERACTIVE);
-				}
-#endif
-			}
-			self->entry();
-			return NULL;
-		}
-		std::function<void()> entry;
-		pthread_t thread;
-		const char* name;
-		bool maxPriority=false;
-		bool valid=false;
-	};
-}
+} // namespace tgvoip
 
 #ifdef __APPLE__
 #include <dispatch/dispatch.h>
-namespace tgvoip{
-class Semaphore{
-public:
-	Semaphore(unsigned int maxCount, unsigned int initValue){
-		sem = dispatch_semaphore_create(initValue);
-	}
-	
-	~Semaphore(){
-#if ! __has_feature(objc_arc)
-        dispatch_release(sem);
 #endif
-	}
-	
-	void Acquire(){
-		dispatch_semaphore_wait(sem, DISPATCH_TIME_FOREVER);
-	}
-	
-	void Release(){
-		dispatch_semaphore_signal(sem);
-	}
-	
-	void Acquire(int count){
-		for(int i=0;i<count;i++)
-			Acquire();
-	}
-	
-	void Release(int count){
-		for(int i=0;i<count;i++)
-			Release();
-	}
-	
+
+namespace tgvoip
+{
+
+class Semaphore
+{
+public:
+    Semaphore(unsigned int maxCount, unsigned int initValue);
+    ~Semaphore();
+
+    void Acquire();
+    void Release();
+    void Acquire(int count);
+    void Release(int count);
+
 private:
-	dispatch_semaphore_t sem;
-};
-}
+#ifdef __APPLE__
+    dispatch_semaphore_t m_sem;
 #else
-namespace tgvoip{
-class Semaphore{
-public:
-	Semaphore(unsigned int maxCount, unsigned int initValue){
-		sem_init(&sem, 0, initValue);
-	}
-
-	~Semaphore(){
-		sem_destroy(&sem);
-	}
-
-	void Acquire(){
-		sem_wait(&sem);
-	}
-
-	void Release(){
-		sem_post(&sem);
-	}
-
-	void Acquire(int count){
-		for(int i=0;i<count;i++)
-			Acquire();
-	}
-
-	void Release(int count){
-		for(int i=0;i<count;i++)
-			Release();
-	}
-
-private:
-	sem_t sem;
-};
-}
+    sem_t m_sem;
 #endif
+};
+
+} // namespace tgvoip
 
 #elif defined(_WIN32)
 
+#define TGVOIP_WIN32_THREADING
+
 #include <Windows.h>
-#include <assert.h>
+#include <cassert>
 
-namespace tgvoip{
-	class Mutex{
-	public:
-		Mutex(){
-#if !defined(WINAPI_FAMILY) || WINAPI_FAMILY!=WINAPI_FAMILY_PHONE_APP
-			InitializeCriticalSection(&section);
-#else
-			InitializeCriticalSectionEx(&section, 0, 0);
-#endif
-		}
+namespace tgvoip
+{
 
-		~Mutex(){
-			DeleteCriticalSection(&section);
-		}
-
-		void Lock(){
-			EnterCriticalSection(&section);
-		}
-
-		void Unlock(){
-			LeaveCriticalSection(&section);
-		}
-
-	private:
-		Mutex(const Mutex& other);
-		CRITICAL_SECTION section;
-	};
-
-	class Thread{
-	public:
-		Thread(std::function<void()> entry) : entry(entry){
-			name=NULL;
-			thread=NULL;
-		}
-
-		~Thread(){
-		}
-
-		void Start(){
-			thread=CreateThread(NULL, 0, Thread::ActualEntryPoint, this, 0, &id);
-		}
-
-		void Join(){
-			if(!thread)
-				return;
-#if !defined(WINAPI_FAMILY) || WINAPI_FAMILY!=WINAPI_FAMILY_PHONE_APP
-			WaitForSingleObject(thread, INFINITE);
-#else
-			WaitForSingleObjectEx(thread, INFINITE, false);
-#endif
-			CloseHandle(thread);
-		}
-
-		void SetName(const char* name){
-			this->name=name;
-		}
-
-		void SetMaxPriority(){
-			SetThreadPriority(thread, THREAD_PRIORITY_HIGHEST);
-		}
-
-		static void Sleep(double seconds){
-			::Sleep((DWORD)(seconds*1000));
-		}
-
-		bool IsCurrent(){
-			return id==GetCurrentThreadId();
-		}
-
-	private:
-		static const DWORD MS_VC_EXCEPTION=0x406D1388;
-
-		#pragma pack(push,8)
-		typedef struct tagTHREADNAME_INFO
-		{
-		   DWORD dwType; // Must be 0x1000.
-		   LPCSTR szName; // Pointer to name (in user addr space).
-		   DWORD dwThreadID; // Thread ID (-1=caller thread).
-		  DWORD dwFlags; // Reserved for future use, must be zero.
-		} THREADNAME_INFO;
-		#pragma pack(pop)
-
-		static DWORD WINAPI ActualEntryPoint(void* arg){
-			Thread* self=reinterpret_cast<Thread*>(arg);
-			if(self->name){
-				THREADNAME_INFO info;
-				info.dwType=0x1000;
-				info.szName=self->name;
-				info.dwThreadID=-1;
-				info.dwFlags=0;
-				__try{
-					RaiseException(MS_VC_EXCEPTION, 0, sizeof(info)/sizeof(ULONG_PTR), (ULONG_PTR*)&info);
-				}__except(EXCEPTION_EXECUTE_HANDLER){}
-			}
-			self->entry();
-			return 0;
-		}
-		std::function<void()> entry;
-		HANDLE thread;
-		DWORD id;
-		const char* name;
-	};
-
-class Semaphore{
+class Mutex
+{
 public:
-	Semaphore(unsigned int maxCount, unsigned int initValue){
-#if !defined(WINAPI_FAMILY) || WINAPI_FAMILY!=WINAPI_FAMILY_PHONE_APP
-		h=CreateSemaphore(NULL, initValue, maxCount, NULL);
+    Mutex()
+    {
+#if !defined(WINAPI_FAMILY) || WINAPI_FAMILY != WINAPI_FAMILY_PHONE_APP
+        InitializeCriticalSection(&section);
 #else
-		h=CreateSemaphoreEx(NULL, initValue, maxCount, NULL, 0, SEMAPHORE_ALL_ACCESS);
-		assert(h);
+        InitializeCriticalSectionEx(&section, 0, 0);
 #endif
-	}
+    }
 
-	~Semaphore(){
-		CloseHandle(h);
-	}
+    ~Mutex()
+    {
+        DeleteCriticalSection(&section);
+    }
 
-	void Acquire(){
-#if !defined(WINAPI_FAMILY) || WINAPI_FAMILY!=WINAPI_FAMILY_PHONE_APP
-		WaitForSingleObject(h, INFINITE);
-#else
-		WaitForSingleObjectEx(h, INFINITE, false);
-#endif
-	}
+    void Lock()
+    {
+        EnterCriticalSection(&section);
+    }
 
-	void Release(){
-		ReleaseSemaphore(h, 1, NULL);
-	}
-
-	void Acquire(int count){
-		for(int i=0;i<count;i++)
-			Acquire();
-	}
-
-	void Release(int count){
-		ReleaseSemaphore(h, count, NULL);
-	}
+    void Unlock()
+    {
+        LeaveCriticalSection(&section);
+    }
 
 private:
-	HANDLE h;
+    Mutex(const Mutex& other);
+    CRITICAL_SECTION section;
 };
-}
+
+class Thread
+{
+public:
+    Thread(std::function<void()> entry)
+        : entry(entry)
+    {
+        name = NULL;
+        thread = NULL;
+    }
+
+    ~Thread()
+    {
+    }
+
+    void Start()
+    {
+        thread = CreateThread(NULL, 0, Thread::ActualEntryPoint, this, 0, &id);
+    }
+
+    void Join()
+    {
+        if (!thread)
+            return;
+#if !defined(WINAPI_FAMILY) || WINAPI_FAMILY != WINAPI_FAMILY_PHONE_APP
+        WaitForSingleObject(thread, INFINITE);
+#else
+        WaitForSingleObjectEx(thread, INFINITE, false);
+#endif
+        CloseHandle(thread);
+    }
+
+    void SetName(const char* name)
+    {
+        this->name = name;
+    }
+
+    void SetMaxPriority()
+    {
+        SetThreadPriority(thread, THREAD_PRIORITY_HIGHEST);
+    }
+
+    static void Sleep(double seconds)
+    {
+        ::Sleep((DWORD)(seconds * 1000));
+    }
+
+    bool IsCurrent()
+    {
+        return id == GetCurrentThreadId();
+    }
+
+private:
+    static const DWORD MS_VC_EXCEPTION = 0x406D1388;
+
+#pragma pack(push, 8)
+    typedef struct tagTHREADNAME_INFO
+    {
+        DWORD dwType; // Must be 0x1000.
+        LPCSTR szName; // Pointer to name (in user addr space).
+        DWORD dwThreadID; // Thread ID (-1=caller thread).
+        DWORD dwFlags; // Reserved for future use, must be zero.
+    } THREADNAME_INFO;
+#pragma pack(pop)
+
+    static DWORD WINAPI ActualEntryPoint(void* arg)
+    {
+        Thread* self = reinterpret_cast<Thread*>(arg);
+        if (self->name)
+        {
+            THREADNAME_INFO info;
+            info.dwType = 0x1000;
+            info.szName = self->name;
+            info.dwThreadID = -1;
+            info.dwFlags = 0;
+            __try
+            {
+                RaiseException(MS_VC_EXCEPTION, 0, sizeof(info) / sizeof(ULONG_PTR), (ULONG_PTR*)&info);
+            }
+            __except (EXCEPTION_EXECUTE_HANDLER)
+            {
+            }
+        }
+        self->entry();
+        return 0;
+    }
+    std::function<void()> entry;
+    HANDLE thread;
+    DWORD id;
+    const char* name;
+};
+
+class Semaphore
+{
+public:
+    Semaphore(unsigned int maxCount, unsigned int initValue)
+    {
+#if !defined(WINAPI_FAMILY) || WINAPI_FAMILY != WINAPI_FAMILY_PHONE_APP
+        h = CreateSemaphore(NULL, initValue, maxCount, NULL);
+#else
+        h = CreateSemaphoreEx(NULL, initValue, maxCount, NULL, 0, SEMAPHORE_ALL_ACCESS);
+        assert(h);
+#endif
+    }
+
+    ~Semaphore()
+    {
+        CloseHandle(h);
+    }
+
+    void Acquire()
+    {
+#if !defined(WINAPI_FAMILY) || WINAPI_FAMILY != WINAPI_FAMILY_PHONE_APP
+        WaitForSingleObject(h, INFINITE);
+#else
+        WaitForSingleObjectEx(h, INFINITE, false);
+#endif
+    }
+
+    void Release()
+    {
+        ReleaseSemaphore(h, 1, NULL);
+    }
+
+    void Acquire(int count)
+    {
+        for (int i = 0; i < count; i++)
+            Acquire();
+    }
+
+    void Release(int count)
+    {
+        ReleaseSemaphore(h, count, NULL);
+    }
+
+private:
+    HANDLE h;
+};
+
+} // namespace tgvoip
 #else
 #error "No threading implementation for your operating system"
 #endif
 
-namespace tgvoip{
-class MutexGuard{
+namespace tgvoip
+{
+
+class MutexGuard
+{
 public:
-    MutexGuard(Mutex &mutex) : mutex(mutex) {
-		mutex.Lock();
-	}
-	~MutexGuard(){
-		mutex.Unlock();
-	}
+    MutexGuard(Mutex& mutex);
+    ~MutexGuard();
+
 private:
-	Mutex &mutex;
+    Mutex& m_mutex;
 };
-}
-	
-#endif //__THREADING_H
+
+} // namespace tgvoip
+
+#endif // THREADING_H

@@ -7,31 +7,35 @@
 #ifndef TGVOIP_VOIPSERVERCONFIG_H
 #define TGVOIP_VOIPSERVERCONFIG_H
 
-#include <map>
-#include <string>
-#include <stdint.h>
-#include "threading.h"
 #include "json11.hpp"
+#include "threading.h"
 
-namespace tgvoip{
+#include <cstdint>
+#include <string>
 
-class ServerConfig{
+namespace tgvoip
+{
+
+class ServerConfig
+{
 public:
-	ServerConfig();
-	~ServerConfig();
-	static ServerConfig* GetSharedInstance();
-	int32_t GetInt(std::string name, int32_t fallback);
-	double GetDouble(std::string name, double fallback);
-	std::string GetString(std::string name, std::string fallback);
-	bool GetBoolean(std::string name, bool fallback);
-	void Update(std::string jsonString);
+    ServerConfig();
+    ~ServerConfig();
+    static ServerConfig* GetSharedInstance();
+    std::int32_t GetInt(const std::string& name, std::int32_t fallback);
+    double GetDouble(const std::string& name, double fallback);
+    std::string GetString(const std::string& name, const std::string& fallback);
+    bool GetBoolean(const std::string& name, bool fallback);
+    void Update(const std::string& jsonString);
 
 private:
-	static ServerConfig* sharedInstance;
-	bool ContainsKey(std::string key);
-    json11::Json config;
-	Mutex mutex;
-};
-}
+    static ServerConfig* m_sharedInstance;
+    json11::Json m_config;
+    Mutex m_mutex;
 
-#endif //TGVOIP_VOIPSERVERCONFIG_H
+    [[nodiscard]] bool ContainsKey(const std::string& key) const;
+};
+
+} // namespace tgvoip
+
+#endif // TGVOIP_VOIPSERVERCONFIG_H

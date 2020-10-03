@@ -4,9 +4,10 @@
 // you should have received with this source code distribution.
 //
 
-#include "AudioOutput.h"
 #include "../logging.h"
-#include <stdlib.h>
+#include "AudioOutput.h"
+
+#include <cstdlib>
 
 #ifdef HAVE_CONFIG_H
 #include "config.h"
@@ -15,12 +16,12 @@
 #if defined(TGVOIP_USE_CALLBACK_AUDIO_IO)
 // nothing
 #elif defined(__ANDROID__)
-#include "../os/android/AudioOutputOpenSLES.h"
 #include "../os/android/AudioOutputAndroid.h"
+#include "../os/android/AudioOutputOpenSLES.h"
 #include <sys/system_properties.h>
 #elif defined(__APPLE__)
-#include <TargetConditionals.h>
 #include "../os/darwin/AudioOutputAudioUnit.h"
+#include <TargetConditionals.h>
 #if TARGET_OS_OSX
 #include "../os/darwin/AudioOutputAudioUnitOSX.h"
 #endif
@@ -44,66 +45,69 @@
 using namespace tgvoip;
 using namespace tgvoip::audio;
 
-int32_t AudioOutput::estimatedDelay=60;
+std::int32_t AudioOutput::m_estimatedDelay = 60;
 
-AudioOutput::AudioOutput() : currentDevice("default"){
-	failed=false;
+AudioOutput::AudioOutput()
+    : m_currentDevice("default")
+{
 }
 
-AudioOutput::AudioOutput(std::string deviceID) : currentDevice(deviceID){
-	failed=false;
+AudioOutput::AudioOutput(std::string deviceID)
+    : m_currentDevice(std::move(deviceID))
+{
 }
 
-AudioOutput::~AudioOutput(){
+AudioOutput::~AudioOutput() = default;
 
-}
-
-
-int32_t AudioOutput::GetEstimatedDelay(){
+std::int32_t AudioOutput::GetEstimatedDelay()
+{
 #if defined(__ANDROID__)
-	char sdkNum[PROP_VALUE_MAX];
-	__system_property_get("ro.build.version.sdk", sdkNum);
-	int systemVersion=atoi(sdkNum);
-	return systemVersion<21 ? 150 : 50;
+    char sdkNum[PROP_VALUE_MAX];
+    __system_property_get("ro.build.version.sdk", sdkNum);
+    int systemVersion = atoi(sdkNum);
+    return systemVersion < 21 ? 150 : 50;
 #endif
-	return estimatedDelay;
+    return m_estimatedDelay;
 }
 
-
-void AudioOutput::EnumerateDevices(std::vector<AudioOutputDevice>& devs){
+void AudioOutput::EnumerateDevices(std::vector<AudioOutputDevice>& devs)
+{
 #if defined(TGVOIP_USE_CALLBACK_AUDIO_IO)
-	// not supported
+    // not supported
 #elif defined(__APPLE__) && TARGET_OS_OSX
-	AudioOutputAudioUnitLegacy::EnumerateDevices(devs);
+    AudioOutputAudioUnitLegacy::EnumerateDevices(devs);
 #elif defined(_WIN32)
 #ifdef TGVOIP_WINXP_COMPAT
-	if(LOBYTE(LOWORD(GetVersion()))<6){
-		AudioOutputWave::EnumerateDevices(devs);
-		return;
-	}
+    if (LOBYTE(LOWORD(GetVersion())) < 6)
+    {
+        AudioOutputWave::EnumerateDevices(devs);
+        return;
+    }
 #endif
-	AudioOutputWASAPI::EnumerateDevices(devs);
+    AudioOutputWASAPI::EnumerateDevices(devs);
 #elif defined(__linux__) && !defined(__ANDROID__)
 #if !defined(WITHOUT_PULSE) && !defined(WITHOUT_ALSA)
-	if(!AudioOutputPulse::EnumerateDevices(devs))
-		AudioOutputALSA::EnumerateDevices(devs);
+    if (!AudioOutputPulse::EnumerateDevices(devs))
+        AudioOutputALSA::EnumerateDevices(devs);
 #elif defined(WITHOUT_PULSE)
-	AudioOutputALSA::EnumerateDevices(devs);
+    AudioOutputALSA::EnumerateDevices(devs);
 #else
-	AudioOutputPulse::EnumerateDevices(devs)
+    AudioOutputPulse::EnumerateDevices(devs);
 #endif
 #endif
 }
 
-
-std::string AudioOutput::GetCurrentDevice(){
-	return currentDevice;
+std::string AudioOutput::GetCurrentDevice() const
+{
+    return m_currentDevice;
 }
 
-void AudioOutput::SetCurrentDevice(std::string deviceID){
-	
+void AudioOutput::SetCurrentDevice(std::string deviceID)
+{
+    m_currentDevice = std::move(deviceID);
 }
 
-bool AudioOutput::IsInitialized(){
-	return !failed;
+bool AudioOutput::IsInitialized() const
+{
+    return !m_failed;
 }

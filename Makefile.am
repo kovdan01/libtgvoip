@@ -4,18 +4,23 @@ CFLAGS = -Wall -DHAVE_CONFIG_H -Wno-unknown-pragmas
 
 lib_LTLIBRARIES = libtgvoip.la
 
-SRC = VoIPController.cpp \
+SRC = TgVoip.cpp \
+AudioDevice.cpp \
+Endpoint.cpp \
+VoIPController.cpp \
 Buffers.cpp \
 CongestionControl.cpp \
 EchoCanceller.cpp \
 JitterBuffer.cpp \
 logging.cpp \
+threading.cpp \
 MediaStreamItf.cpp \
 MessageThread.cpp \
 NetworkSocket.cpp \
 OpusDecoder.cpp \
 OpusEncoder.cpp \
 PacketReassembler.cpp \
+PacketSender.cpp \
 VoIPGroupController.cpp \
 VoIPServerConfig.cpp \
 audio/AudioIO.cpp \
@@ -25,11 +30,18 @@ audio/Resampler.cpp \
 os/posix/NetworkSocketPosix.cpp \
 video/VideoSource.cpp \
 video/VideoRenderer.cpp \
+video/VideoPacketSender.cpp \
+video/VideoFEC.cpp \
 video/ScreamCongestionController.cpp \
 json11.cpp
 
 TGVOIP_HDRS = \
+AudioDevice.h \
+Endpoint.h \
+TgVoip.h \
+VoIPControllerDeclarations.h \
 VoIPController.h \
+VoIPGroupController.h \
 Buffers.h \
 BlockingQueue.h \
 PrivateDefines.h \
@@ -44,6 +56,7 @@ NetworkSocket.h \
 OpusDecoder.h \
 OpusEncoder.h \
 PacketReassembler.h \
+PacketSender.h \
 VoIPServerConfig.h \
 audio/AudioIO.h \
 audio/AudioInput.h \
@@ -51,6 +64,8 @@ audio/AudioOutput.h \
 audio/Resampler.h \
 os/posix/NetworkSocketPosix.h \
 video/VideoSource.h \
+video/VideoPacketSender.h \
+video/VideoFEC.h \
 video/VideoRenderer.h \
 video/ScreamCongestionController.h \
 json11.hpp \
@@ -749,11 +764,25 @@ else
 CFLAGS += -DTGVOIP_NO_DSP
 endif
 
+libtgvoip_la_CFLAGS = $(CRYPTO_CFLAGS) $(OPUS_CFLAGS)
+
+if WITH_ALSA
+libtgvoip_la_CFLAGS += $(ALSA_CFLAGS)
+endif
+
+if WITH_PULSE
+libtgvoip_la_CFLAGS += $(PULSE_CFLAGS)
+endif
+
+libtgvoip_la_CXXFLAGS = $(libtgvoip_la_CFLAGS)
+libtgvoip_la_LDFLAGS = -version-number @LIBTGVOIP_MAJOR_VERSION@:@LIBTGVOIP_MINOR_VERSION@:@LIBTGVOIP_PATCH_VERSION@ $(CRYPTO_LIBS) $(OPUS_LIBS)
 libtgvoip_la_SOURCES = $(SRC) $(TGVOIP_HDRS)
 tgvoipincludedir = $(includedir)/tgvoip
 nobase_tgvoipinclude_HEADERS = $(TGVOIP_HDRS)
 
-CXXFLAGS += -std=gnu++0x $(CFLAGS)
+pkgconfig_DATA = tgvoip.pc
+
+CXXFLAGS += -std=gnu++17 $(CFLAGS)
 if TARGET_OS_OSX
 OBJCFLAGS = $(CFLAGS)
 OBJCXXFLAGS += -std=gnu++0x $(CFLAGS)

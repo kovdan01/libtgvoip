@@ -7,35 +7,42 @@
 #ifndef LIBTGVOIP_AUDIOINPUT_H
 #define LIBTGVOIP_AUDIOINPUT_H
 
-#include <stdint.h>
-#include <vector>
-#include <string>
 #include "../MediaStreamItf.h"
 
-namespace tgvoip{
+#include <cstdint>
+#include <string>
+#include <vector>
+
+namespace tgvoip
+{
 
 class AudioInputDevice;
 class AudioOutputDevice;
-	
-namespace audio{
-class AudioInput : public MediaStreamItf{
-public:
-	AudioInput();
-	AudioInput(std::string deviceID);
-	virtual ~AudioInput();
 
-	bool IsInitialized();
-	virtual std::string GetCurrentDevice();
-	virtual void SetCurrentDevice(std::string deviceID);
-	//static AudioInput* Create(std::string deviceID, void* platformSpecific);
-	static void EnumerateDevices(std::vector<AudioInputDevice>& devs);
-	static int32_t GetEstimatedDelay();
+namespace audio
+{
+
+class AudioInput : public MediaStreamItf
+{
+public:
+    AudioInput();
+    AudioInput(std::string deviceID);
+    virtual ~AudioInput();
+
+    bool IsInitialized() const;
+    virtual std::string GetCurrentDevice() const;
+    virtual void SetCurrentDevice(std::string deviceID);
+    static void EnumerateDevices(std::vector<AudioInputDevice>& devs);
+    static std::int32_t GetEstimatedDelay();
 
 protected:
-	std::string currentDevice;
-	bool failed;
-	static int32_t estimatedDelay;
+    std::string m_currentDevice;
+    bool m_failed = false;
+    static std::int32_t m_estimatedDelay;
 };
-}}
 
-#endif //LIBTGVOIP_AUDIOINPUT_H
+} // namespace audio
+
+} // namespace tgvoip
+
+#endif // LIBTGVOIP_AUDIOINPUT_H

@@ -7,82 +7,96 @@
 #ifndef LIBTGVOIP_MEDIASTREAMINPUT_H
 #define LIBTGVOIP_MEDIASTREAMINPUT_H
 
-#include <string.h>
-#include <vector>
-#include <memory>
-#include <stdint.h>
 #include "threading.h"
 #include "BlockingQueue.h"
 #include "Buffers.h"
 
-namespace tgvoip{
+#include <cstdint>
+#include <functional>
+#include <memory>
+#include <mutex>
+#include <unordered_map>
 
-	class EchoCanceller;
+namespace tgvoip
+{
 
-class MediaStreamItf{
+class EchoCanceller;
+
+class MediaStreamItf
+{
 public:
-	virtual void Start()=0;
-	virtual void Stop()=0;
-	void SetCallback(size_t (*f)(unsigned char*, size_t, void*), void* param);
+    using CallbackType = std::function<std::size_t(std::uint8_t*, std::size_t, void*)>;
 
-//protected:
-	size_t InvokeCallback(unsigned char* data, size_t length);
+    virtual void Start() = 0;
+    virtual void Stop() = 0;
+    void SetCallback(CallbackType callback, void* param);
+
+    std::size_t InvokeCallback(std::uint8_t* data, std::size_t length) const;
+
+    virtual ~MediaStreamItf() = default;
 
 private:
-	size_t (*callback)(unsigned char*, size_t, void*)=NULL;
-	void* callbackParam;
+    mutable std::mutex m_mutexCallback;
+    CallbackType m_callback = nullptr;
+    void* m_callbackParam = nullptr;
 };
 
-	class AudioMixer : public MediaStreamItf{
-	public:
-		AudioMixer();
-		virtual ~AudioMixer();
-		void SetOutput(MediaStreamItf* output);
-		virtual void Start();
-		virtual void Stop();
-		void AddInput(std::shared_ptr<MediaStreamItf> input);
-		void RemoveInput(std::shared_ptr<MediaStreamItf> input);
-		void SetInputVolume(std::shared_ptr<MediaStreamItf> input, float volumeDB);
-		void SetEchoCanceller(EchoCanceller* aec);
-	private:
-		void RunThread();
-		struct MixerInput{
-			std::shared_ptr<MediaStreamItf> source;
-			float multiplier;
-		};
-		Mutex inputsMutex;
-		void DoCallback(unsigned char* data, size_t length);
-		static size_t OutputCallback(unsigned char* data, size_t length, void* arg);
-		std::vector<MixerInput> inputs;
-		Thread* thread;
-		BufferPool bufferPool;
-		BlockingQueue<unsigned char*> processedQueue;
-		Semaphore semaphore;
-		EchoCanceller* echoCanceller;
-		bool running;
-	};
+class AudioMixer : public MediaStreamItf
+{
+public:
+    using MediaStreamItfPtr = std::shared_ptr<MediaStreamItf>;
 
-	class CallbackWrapper : public MediaStreamItf{
-	public:
-		CallbackWrapper(){};
-		virtual ~CallbackWrapper(){};
-		virtual void Start(){};
-		virtual void Stop(){};
+    AudioMixer();
+    ~AudioMixer() override;
+    void SetOutput(MediaStreamItf* output);
+    void Start() override;
+    void Stop() override;
+    void AddInput(MediaStreamItfPtr input);
+    void RemoveInput(const MediaStreamItfPtr& input);
+    void SetInputVolume(const MediaStreamItfPtr& input, float volumeDB);
+    void SetEchoCanceller(EchoCanceller* aec);
 
-	};
+private:
+    BufferPool<960 * 2, 16> m_bufferPool;
+    BlockingQueue<Buffer> m_processedQueue;
+    std::unordered_map<MediaStreamItfPtr, float> m_inputs;
 
-	class AudioLevelMeter{
-	public:
-		AudioLevelMeter();
-		float GetLevel();
-		void Update(int16_t* samples, size_t count);
-	private:
-		int16_t absMax;
-		int16_t count;
-		int8_t currentLevel;
-		int16_t currentLevelFullRange;
-	};
+    mutable Mutex m_inputsMutex;
+    Semaphore m_semaphore;
+
+    Thread* m_thread = nullptr;
+    EchoCanceller* m_echoCanceller = nullptr;
+
+    bool m_running = false;
+
+    void RunThread();
+    void DoCallback(std::uint8_t* data, std::size_t length);
+    static std::size_t OutputCallback(std::uint8_t* data, std::size_t length, void* arg);
 };
 
+class CallbackWrapper : public MediaStreamItf
+{
+public:
+    CallbackWrapper();
+    ~CallbackWrapper() override;
+    void Start() override;
+    void Stop() override;
+};
 
-#endif //LIBTGVOIP_MEDIASTREAMINPUT_H
+class AudioLevelMeter
+{
+public:
+    AudioLevelMeter();
+    float GetLevel();
+    void Update(std::int16_t* samples, std::size_t m_count);
+
+private:
+    std::int16_t m_absMax;
+    std::int16_t m_count;
+    std::int16_t m_currentLevelFullRange;
+    std::int8_t m_currentLevel;
+};
+
+} // namespace tgvoip
+
+#endif // LIBTGVOIP_MEDIASTREAMINPUT_H

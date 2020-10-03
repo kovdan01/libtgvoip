@@ -5,66 +5,67 @@
 #ifndef TGVOIP_PACKETREASSEMBLER_H
 #define TGVOIP_PACKETREASSEMBLER_H
 
-#include <vector>
-#include <functional>
-#include <unordered_map>
-
+#include "logging.h"
 #include "Buffers.h"
 
-namespace tgvoip {
-	class PacketReassembler{
-	public:
-		PacketReassembler();
-		virtual ~PacketReassembler();
+#include <functional>
+#include <memory>
+#include <vector>
 
-		void Reset();
-		void AddFragment(Buffer pkt, unsigned int fragmentIndex, unsigned int fragmentCount, uint32_t pts, bool keyframe);
-		void SetCallback(std::function<void(Buffer packet, uint32_t pts, bool keyframe)> callback);
+namespace tgvoip
+{
 
-	private:
-		struct Packet{
-			uint32_t timestamp;
-			uint32_t partCount;
-			uint32_t receivedPartCount;
-			bool isKeyframe;
-			Buffer* parts;
+class PacketReassembler
+{
+public:
+    PacketReassembler();
+    virtual ~PacketReassembler();
 
-			TGVOIP_DISALLOW_COPY_AND_ASSIGN(Packet);
+    void Reset();
+    void AddFragment(Buffer pkt, unsigned int fragmentIndex, unsigned int fragmentCount,
+                     std::uint32_t pts, std::uint8_t fseq, bool keyframe, std::uint16_t rotation);
+    void AddFEC(Buffer data, std::uint8_t fseq, unsigned int frameCount, unsigned int fecScheme);
 
-			Packet(Packet&& other) : timestamp(other.timestamp), partCount(other.partCount), receivedPartCount(other.receivedPartCount), isKeyframe(other.isKeyframe){
-				parts=other.parts;
-				other.parts=NULL;
-			}
-			Packet& operator=(Packet&& other){
-				if(&other!=this){
-					if(parts)
-						delete[] parts;
-					parts=other.parts;
-					other.parts=NULL;
-					timestamp=other.timestamp;
-					partCount=other.partCount;
-					receivedPartCount=other.receivedPartCount;
-					isKeyframe=other.isKeyframe;
-				}
-				return *this;
-			}
+    using CallbackType = std::function<void(Buffer packet, std::uint32_t pts, bool keyframe, std::uint16_t rotation)>;
+    void SetCallback(CallbackType m_callback);
 
-			Packet(uint32_t partCount) : partCount(partCount){
-				parts=new Buffer[partCount];
-			}
-			~Packet(){
-				if(parts)
-					delete[] parts;
-			}
+private:
+    struct Packet
+    {
+        std::uint32_t seq;
+        std::uint32_t timestamp;
+        std::uint32_t partCount;
+        std::uint32_t receivedPartCount;
+        bool isKeyframe;
+        std::uint16_t rotation;
+        std::vector<Buffer> parts;
 
+        Packet(std::uint32_t seq, std::uint32_t timestamp, std::uint32_t partCount,
+               std::uint32_t receivedPartCount, bool keyframe, std::uint16_t rotation);
 
-			void AddFragment(Buffer pkt, uint32_t fragmentIndex);
-			Buffer Reassemble();
-		};
-		std::function<void(Buffer, uint32_t, bool)> callback;
-		std::vector<Packet> packets;
-		uint32_t maxTimestamp=0;
-	};
-}
+        void AddFragment(Buffer pkt, std::uint32_t fragmentIndex);
+        Buffer Reassemble();
+    };
 
-#endif //TGVOIP_PACKETREASSEMBLER_H
+    struct FecPacket
+    {
+        std::uint32_t seq;
+        std::uint32_t prevFrameCount;
+        std::uint32_t fecScheme;
+        Buffer data;
+    };
+
+    CallbackType m_callback;
+    std::vector<std::unique_ptr<Packet>> m_packets;
+    std::vector<std::unique_ptr<Packet>> m_oldPackets; // for FEC
+    std::vector<FecPacket> m_fecPackets;
+    std::uint32_t m_maxTimestamp = 0;
+    std::uint32_t m_lastFrameSeq = 0;
+    bool m_waitingForFEC = false;
+
+    bool TryDecodeFEC(FecPacket& fec);
+};
+
+} // namespace tgvoip
+
+#endif // TGVOIP_PACKETREASSEMBLER_H

@@ -8,76 +8,94 @@
 #define LIBTGVOIP_ECHOCANCELLER_H
 
 #include "threading.h"
-#include "Buffers.h"
-#include "BlockingQueue.h"
-#include "MediaStreamItf.h"
 #include "utils.h"
+#include "BlockingQueue.h"
+#include "Buffers.h"
+#include "MediaStreamItf.h"
 
-namespace webrtc{
-	class AudioProcessing;
-	class AudioFrame;
-}
+#include <cstdint>
 
-namespace tgvoip{
-class EchoCanceller{
+namespace webrtc
+{
 
+class AudioProcessing;
+class AudioFrame;
+
+} // namespace webrtc
+
+namespace tgvoip
+{
+
+class EchoCanceller
+{
 public:
-	TGVOIP_DISALLOW_COPY_AND_ASSIGN(EchoCanceller);
-	EchoCanceller(bool enableAEC, bool enableNS, bool enableAGC);
-	virtual ~EchoCanceller();
-	virtual void Start();
-	virtual void Stop();
-	void SpeakerOutCallback(unsigned char* data, size_t len);
-	void Enable(bool enabled);
-	void ProcessInput(int16_t* inOut, size_t numSamples, bool& hasVoice);
-	void SetAECStrength(int strength);
-	void SetVoiceDetectionEnabled(bool enabled);
+    TGVOIP_DISALLOW_COPY_AND_ASSIGN(EchoCanceller);
+    EchoCanceller(bool m_enableAEC, bool m_enableNS, bool m_enableAGC);
+    virtual ~EchoCanceller();
+    virtual void Start();
+    virtual void Stop();
+    void SpeakerOutCallback(std::uint8_t* data, std::size_t len);
+    void Enable(bool enabled);
+    void ProcessInput(std::int16_t* inOut, std::size_t numSamples, bool& hasVoice);
+    void SetAECStrength(int strength);
+    void SetVoiceDetectionEnabled(bool enabled);
 
 private:
-	bool enableAEC;
-	bool enableAGC;
-	bool enableNS;
-	bool enableVAD=false;
-	bool isOn;
 #ifndef TGVOIP_NO_DSP
-	webrtc::AudioProcessing* apm=NULL;
-	webrtc::AudioFrame* audioFrame=NULL;
-	void RunBufferFarendThread();
-	bool didBufferFarend;
-	Thread* bufferFarendThread;
-	BlockingQueue<int16_t*>* farendQueue;
-	BufferPool* farendBufferPool;
-	bool running;
+    BufferPool<960 * 2, 10> m_farendBufferPool;
+    BlockingQueue<Buffer>* m_farendQueue;
+    Thread* m_bufferFarendThread;
+    webrtc::AudioProcessing* m_apm = nullptr;
+    webrtc::AudioFrame* m_audioFrame = nullptr;
+    bool m_didBufferFarend;
+    bool m_running;
+
+    void RunBufferFarendThread();
 #endif
+
+    bool m_enableAEC;
+    bool m_enableAGC;
+    bool m_enableNS;
+    bool m_enableVAD = false;
+    bool m_isOn;
 };
 
-namespace effects{
+namespace effects
+{
 
-class AudioEffect{
+class AudioEffect
+{
 public:
-	virtual ~AudioEffect()=0;
-	virtual void Process(int16_t* inOut, size_t numSamples)=0;
-	virtual void SetPassThrough(bool passThrough);
+    virtual ~AudioEffect() = 0;
+    virtual void Process(std::int16_t* inOut, std::size_t numSamples) const = 0;
+    virtual void SetPassThrough(bool m_passThrough);
+
 protected:
-	bool passThrough=false;
-};
+    [[nodiscard]] bool GetPassThrough() const;
 
-class Volume : public AudioEffect{
-public:
-	Volume();
-	virtual ~Volume();
-	virtual void Process(int16_t* inOut, size_t numSamples);
-	/**
-	* Level is (0.0, 2.0]
-	*/
-	void SetLevel(float level);
-	float GetLevel();
 private:
-	float level=1.0f;
-	float multiplier=1.0f;
+    bool m_passThrough = false;
 };
 
-}
-}
+class Volume : public AudioEffect
+{
+public:
+    Volume();
+    ~Volume() override;
+    void Process(std::int16_t* inOut, std::size_t numSamples) const override;
+    /**
+     * Level is (0.0, 2.0]
+     */
+    void SetLevel(float m_level);
+    [[nodiscard]] float GetLevel() const;
 
-#endif //LIBTGVOIP_ECHOCANCELLER_H
+private:
+    float m_level = 1.0f;
+    float m_multiplier = 1.0f;
+};
+
+} // namespace effects
+
+} // namespace tgvoip
+
+#endif // LIBTGVOIP_ECHOCANCELLER_H

@@ -7,74 +7,84 @@
 #ifndef LIBTGVOIP_OPUSDECODER_H
 #define LIBTGVOIP_OPUSDECODER_H
 
-
-#include "MediaStreamItf.h"
 #include "threading.h"
+#include "utils.h"
 #include "BlockingQueue.h"
 #include "Buffers.h"
 #include "EchoCanceller.h"
 #include "JitterBuffer.h"
-#include "utils.h"
-#include <stdio.h>
-#include <vector>
+#include "MediaStreamItf.h"
+
+#include <atomic>
+#include <cstdio>
 #include <memory>
+#include <vector>
 
 struct OpusDecoder;
 
-namespace tgvoip{
-class OpusDecoder {
+namespace tgvoip
+{
+
+class OpusDecoder
+{
 public:
-	TGVOIP_DISALLOW_COPY_AND_ASSIGN(OpusDecoder);
-	virtual void Start();
+    TGVOIP_DISALLOW_COPY_AND_ASSIGN(OpusDecoder);
+    virtual void Start();
+    virtual void Stop();
 
-	virtual void Stop();
+    OpusDecoder(MediaStreamItf* dst, bool isAsync, bool needEC);
+    virtual ~OpusDecoder();
 
-	OpusDecoder(const std::shared_ptr<MediaStreamItf>& dst, bool isAsync, bool needEC);
-	OpusDecoder(const std::unique_ptr<MediaStreamItf>& dst, bool isAsync, bool needEC);
-	OpusDecoder(MediaStreamItf* dst, bool isAsync, bool needEC);
-	virtual ~OpusDecoder();
-	size_t HandleCallback(unsigned char* data, size_t len);
-	void SetEchoCanceller(EchoCanceller* canceller);
-	void SetFrameDuration(uint32_t duration);
-	void SetJitterBuffer(std::shared_ptr<JitterBuffer> jitterBuffer);
-	void SetDTX(bool enable);
-	void SetLevelMeter(AudioLevelMeter* levelMeter);
-	void AddAudioEffect(effects::AudioEffect* effect);
-	void RemoveAudioEffect(effects::AudioEffect* effect);
+    std::size_t HandleCallback(std::uint8_t* data, std::size_t len);
+    void SetEchoCanceller(EchoCanceller* canceller);
+    void SetFrameDuration(std::uint32_t duration);
+    void SetJitterBuffer(std::shared_ptr<JitterBuffer> m_jitterBuffer);
+    void SetDTX(bool enable);
+    void SetLevelMeter(AudioLevelMeter* m_levelMeter);
+    void AddAudioEffect(effects::AudioEffect* effect);
+    void RemoveAudioEffect(effects::AudioEffect* effect);
 
 private:
-	void Initialize(bool isAsync, bool needEC);
-	static size_t Callback(unsigned char* data, size_t len, void* param);
-	void RunThread();
-	int DecodeNextFrame();
-	::OpusDecoder* dec;
-	::OpusDecoder* ecDec;
-	BlockingQueue<unsigned char*>* decodedQueue;
-	BufferPool* bufferPool;
-	unsigned char* buffer;
-	unsigned char* lastDecoded;
-	unsigned char* processedBuffer;
-	size_t outputBufferSize;
-	bool running;
-    Thread* thread;
-	Semaphore* semaphore;
-	uint32_t frameDuration;
-	EchoCanceller* echoCanceller;
-	std::shared_ptr<JitterBuffer> jitterBuffer;
-	AudioLevelMeter* levelMeter;
-	int consecutiveLostPackets;
-	bool enableDTX;
-	size_t silentPacketCount;
-	std::vector<effects::AudioEffect*> postProcEffects;
-	bool async;
-	unsigned char nextBuffer[8192];
-	unsigned char decodeBuffer[8192];
-	size_t nextLen;
-	unsigned int packetsPerFrame;
-	ptrdiff_t remainingDataLen;
-	bool prevWasEC;
-	int16_t prevLastSample;
-};
-}
+    BlockingQueue<Buffer>* m_decodedQueue;
+    BufferPool<960 * 2, 32> m_bufferPool;
+    std::vector<effects::AudioEffect*> m_postProcEffects;
+    std::uint8_t* m_buffer;
+    std::uint8_t* m_processedBuffer;
+    std::uint8_t* m_lastDecoded;
 
-#endif //LIBTGVOIP_OPUSDECODER_H
+    ::OpusDecoder* m_dec;
+    ::OpusDecoder* m_ecDec;
+    EchoCanceller* m_echoCanceller;
+    AudioLevelMeter* m_levelMeter;
+    std::shared_ptr<JitterBuffer> m_jitterBuffer;
+
+    Thread* m_thread;
+    Semaphore* m_semaphore;
+
+    std::size_t m_outputBufferSize;
+    std::size_t m_silentPacketCount;
+    std::size_t m_nextLen;
+    std::ptrdiff_t m_remainingDataLen;
+
+    std::uint32_t m_frameDuration;
+    unsigned int m_packetsPerFrame;
+    int m_consecutiveLostPackets;
+
+    alignas(2) std::uint8_t m_nextBuffer[8192];
+    alignas(2) std::uint8_t m_decodeBuffer[8192];
+
+    std::atomic<bool> m_running;
+    std::atomic<bool> m_async;
+    bool m_enableDTX;
+    bool m_prevWasEC;
+
+
+    void Initialize(bool isAsync, bool needEC);
+    void RunThread();
+    int DecodeNextFrame();
+    static std::size_t Callback(std::uint8_t* data, std::size_t len, void* param);
+};
+
+} // namespace tgvoip
+
+#endif // LIBTGVOIP_OPUSDECODER_H

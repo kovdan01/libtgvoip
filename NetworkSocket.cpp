@@ -2,681 +2,867 @@
 // Created by Grishka on 29.03.17.
 //
 
+#include "logging.h"
+#include "PrivateDefines.h"
+#include "Buffers.h"
 #include "NetworkSocket.h"
-#include <stdexcept>
-#include <algorithm>
-#include <stdlib.h>
-#include <string.h>
+#include "VoIPController.h"
+#include "VoIPServerConfig.h"
+
 #if defined(_WIN32)
 #include "os/windows/NetworkSocketWinsock.h"
 #include <winsock2.h>
 #else
 #include "os/posix/NetworkSocketPosix.h"
 #endif
-#include "logging.h"
-#include "VoIPServerConfig.h"
-#include "VoIPController.h"
-#include "Buffers.h"
+
+#include <algorithm>
+#include <cstdlib>
+#include <cstring>
+#include <stdexcept>
 
 #define MIN_UDP_PORT 16384
 #define MAX_UDP_PORT 32768
 
 using namespace tgvoip;
 
-NetworkSocket::NetworkSocket(NetworkProtocol protocol) : protocol(protocol){
-	ipv6Timeout=ServerConfig::GetSharedInstance()->GetDouble("nat64_fallback_timeout", 3);
-	failed=false;
+NetworkAddress::NetworkAddress() = default;
+
+NetworkPacket::NetworkPacket(Buffer data, const NetworkAddress& address, std::uint16_t port, NetworkProtocol protocol)
+    : data(std::move(data))
+    , address(address)
+    , protocol(protocol)
+    , port(port)
+{
 }
 
-NetworkSocket::~NetworkSocket(){
-
+NetworkPacket NetworkPacket::Empty()
+{
+    return NetworkPacket{ Buffer(), NetworkAddress::Empty(), 0, NetworkProtocol::UDP };
 }
 
-std::string NetworkSocket::GetLocalInterfaceInfo(IPv4Address *inet4addr, IPv6Address *inet6addr){
-	std::string r="not implemented";
-	return r;
+bool NetworkPacket::IsEmpty() const
+{
+    return data.IsEmpty() || (protocol == NetworkProtocol::UDP && (port == 0 || address.IsEmpty()));
 }
 
-uint16_t NetworkSocket::GenerateLocalPort(){
-	uint16_t rnd;
-	VoIPController::crypto.rand_bytes(reinterpret_cast<uint8_t*>(&rnd), 2);
-	return (uint16_t) ((rnd%(MAX_UDP_PORT-MIN_UDP_PORT))+MIN_UDP_PORT);
+NetworkSocket::NetworkSocket(NetworkProtocol protocol)
+    : m_ipv6Timeout(ServerConfig::GetSharedInstance()->GetDouble("nat64_fallback_timeout", 3))
+    , m_protocol(protocol)
+    , m_failed(false)
+{
 }
 
-void NetworkSocket::SetMaxPriority(){
+NetworkSocket::~NetworkSocket() = default;
+
+std::string NetworkSocket::GetLocalInterfaceInfo(NetworkAddress* inet4addr, NetworkAddress* inet6addr)
+{
+    return "not implemented";
 }
 
-bool NetworkSocket::IsFailed(){
-	return failed;
+std::uint16_t NetworkSocket::GenerateLocalPort()
+{
+    std::uint16_t rnd;
+    VoIPController::crypto.rand_bytes(reinterpret_cast<std::uint8_t*>(&rnd), 2);
+    return static_cast<std::uint16_t>((rnd % (MAX_UDP_PORT - MIN_UDP_PORT)) + MIN_UDP_PORT);
 }
 
-NetworkSocket *NetworkSocket::Create(NetworkProtocol protocol){
+void NetworkSocket::SetMaxPriority()
+{
+}
+
+std::uint16_t NetworkSocket::GetLocalPort()
+{
+    return 0;
+}
+
+void NetworkSocket::OnActiveInterfaceChanged()
+{
+}
+
+NetworkAddress NetworkSocket::GetConnectedAddress()
+{
+    return NetworkAddress::Empty();
+}
+
+std::uint16_t NetworkSocket::GetConnectedPort()
+{
+    return 0;
+}
+
+void NetworkSocket::SetTimeouts(int sendTimeout, int recvTimeout)
+{
+}
+
+bool NetworkSocket::IsFailed() const
+{
+    return m_failed;
+}
+
+bool NetworkSocket::IsReadyToSend() const
+{
+    return m_readyToSend;
+}
+
+bool NetworkSocket::OnReadyToSend()
+{
+    m_readyToSend = true;
+    return true;
+}
+
+bool NetworkSocket::OnReadyToReceive()
+{
+    return true;
+}
+
+void NetworkSocket::SetTimeout(double timeout)
+{
+    m_timeout = timeout;
+}
+
+NetworkSocket* NetworkSocket::Create(NetworkProtocol protocol)
+{
 #ifndef _WIN32
-	return new NetworkSocketPosix(protocol);
+    return new NetworkSocketPosix(protocol);
 #else
-	return new NetworkSocketWinsock(protocol);
+    return new NetworkSocketWinsock(protocol);
 #endif
 }
 
-IPv4Address *NetworkSocket::ResolveDomainName(std::string name){
+NetworkAddress NetworkSocket::ResolveDomainName(const std::string& name)
+{
 #ifndef _WIN32
-	return NetworkSocketPosix::ResolveDomainName(name);
+    return NetworkSocketPosix::ResolveDomainName(name);
 #else
-	return NetworkSocketWinsock::ResolveDomainName(name);
+    return NetworkSocketWinsock::ResolveDomainName(name);
 #endif
 }
 
-void NetworkSocket::GenerateTCPO2States(unsigned char* buffer, TCPO2State* recvState, TCPO2State* sendState){
-	memset(recvState, 0, sizeof(TCPO2State));
-	memset(sendState, 0, sizeof(TCPO2State));
-	unsigned char nonce[64];
-	uint32_t *first = reinterpret_cast<uint32_t*>(nonce), *second = first + 1;
-	uint32_t first1 = 0x44414548U, first2 = 0x54534f50U, first3 = 0x20544547U, first4 = 0x20544547U, first5 = 0xeeeeeeeeU;
-	uint32_t second1 = 0;
-	do {
-		VoIPController::crypto.rand_bytes(nonce, sizeof(nonce));
-	} while (*first == first1 || *first == first2 || *first == first3 || *first == first4 || *first == first5 || *second == second1 || *reinterpret_cast<unsigned char*>(nonce) == 0xef);
+void NetworkSocket::GenerateTCPO2States(std::uint8_t* buffer, TCPO2State* recvState, TCPO2State* sendState)
+{
+    std::memset(recvState, 0, sizeof(TCPO2State));
+    std::memset(sendState, 0, sizeof(TCPO2State));
 
-	// prepare encryption key/iv
-	memcpy(sendState->key, nonce + 8, 32);
-	memcpy(sendState->iv, nonce + 8 + 32, 16);
+    std::array<std::uint8_t, 64> nonce;
 
-	// prepare decryption key/iv
-	char reversed[48];
-	memcpy(reversed, nonce + 8, sizeof(reversed));
-	std::reverse(reversed, reversed + sizeof(reversed));
-	memcpy(recvState->key, reversed, 32);
-	memcpy(recvState->iv, reversed + 32, 16);
+    std::uint32_t *first = reinterpret_cast<std::uint32_t*>(nonce.data()), *second = first + 1;
+    std::uint32_t first1 = 0x44414548u, first2 = 0x54534F50u, first3 = 0x20544547u, first4 = 0x20544547u, first5 = 0xEEEEEEEEu;
+    std::uint32_t second1 = 0;
+    do
+    {
+        VoIPController::crypto.rand_bytes(nonce.data(), STD_ARRAY_SIZEOF(nonce));
+    } while (*first == first1 || *first == first2 || *first == first3 || *first == first4 ||
+             *first == first5 || *second == second1 || nonce.front() == 0xEF);
 
-	// write protocol identifier
-	*reinterpret_cast<uint32_t*>(nonce + 56) = 0xefefefefU;
-	memcpy(buffer, nonce, 56);
-	EncryptForTCPO2(nonce, sizeof(nonce), sendState);
-	memcpy(buffer+56, nonce+56, 8);
+    // prepare encryption key/iv
+    std::memcpy(sendState->key, nonce.data() + 8, 32);
+    std::memcpy(sendState->iv, nonce.data() + 8 + 32, 16);
+
+    // prepare decryption key/iv
+    std::array<char, 48> reversed;
+
+    std::memcpy(reversed.data(), nonce.data() + 8, STD_ARRAY_SIZEOF(reversed));
+    std::reverse(reversed.begin(), reversed.end());
+    std::memcpy(recvState->key, reversed.data(), 32);
+    std::memcpy(recvState->iv, reversed.data() + 32, 16);
+
+    // write protocol identifier
+    *reinterpret_cast<std::uint32_t*>(nonce.data() + 56) = 0xEFEFEFEFu;
+    std::memcpy(buffer, nonce.data(), 56);
+    EncryptForTCPO2(nonce.data(), STD_ARRAY_SIZEOF(nonce), sendState);
+    std::memcpy(buffer + 56, nonce.data() + 56, 8);
 }
 
-void NetworkSocket::EncryptForTCPO2(unsigned char *buffer, size_t len, TCPO2State *state){
-	VoIPController::crypto.aes_ctr_encrypt(buffer, len, state->key, state->iv, state->ecount, &state->num);
+void NetworkSocket::EncryptForTCPO2(std::uint8_t* buffer, std::size_t len, TCPO2State* state)
+{
+    VoIPController::crypto.aes_ctr_encrypt(buffer, len, state->key, state->iv, state->ecount, &state->num);
 }
 
-size_t NetworkSocket::Receive(unsigned char *buffer, size_t len){
-	NetworkPacket pkt={0};
-	pkt.data=buffer;
-	pkt.length=len;
-	Receive(&pkt);
-	return pkt.length;
+std::size_t NetworkSocket::Receive(std::uint8_t* buffer, std::size_t len)
+{
+    NetworkPacket pkt = Receive(len);
+    if (pkt.IsEmpty())
+        return 0;
+    std::size_t actualLen = std::min(len, pkt.data.Length());
+    std::memcpy(buffer, *pkt.data, actualLen);
+    return actualLen;
 }
 
-size_t NetworkSocket::Send(unsigned char *buffer, size_t len){
-	NetworkPacket pkt={0};
-	pkt.data=buffer;
-	pkt.length=len;
-	Send(&pkt);
-	return pkt.length;
+NetworkSocketWrapper::NetworkSocketWrapper(NetworkProtocol protocol)
+    : NetworkSocket(protocol)
+{
 }
 
-bool NetworkAddress::operator==(const NetworkAddress &other) const{
-	const IPv4Address* self4=dynamic_cast<const IPv4Address*>(this);
-	const IPv4Address* other4=dynamic_cast<const IPv4Address*>((NetworkAddress*)&other);
-	if(self4 && other4){
-		return self4->GetAddress()==other4->GetAddress();
-	}
-	const IPv6Address* self6=dynamic_cast<const IPv6Address*>(this);
-	const IPv6Address* other6=dynamic_cast<const IPv6Address*>((NetworkAddress*)&other);
-	if(self6 && other6){
-		return memcmp(self6->GetAddress(), other6->GetAddress(), 16)==0;
-	}
-	return false;
+NetworkSocketWrapper::~NetworkSocketWrapper() = default;
+
+void NetworkSocketWrapper::SetNonBlocking(bool)
+{
 }
 
-bool NetworkAddress::operator!=(const NetworkAddress &other) const{
-	return !(*this == other);
+bool NetworkAddress::operator==(const NetworkAddress& other) const
+{
+    if (isIPv6 != other.isIPv6)
+        return false;
+    if (!isIPv6)
+        return addr.ipv4 == other.addr.ipv4;
+
+    return std::memcmp(addr.ipv6, other.addr.ipv6, 16) == 0;
 }
 
-IPv4Address::IPv4Address(std::string addr){
+bool NetworkAddress::operator!=(const NetworkAddress& other) const
+{
+    return !(*this == other);
+}
+
+std::string NetworkAddress::ToString() const
+{
+    if (isIPv6)
+    {
 #ifndef _WIN32
-	this->address=NetworkSocketPosix::StringToV4Address(addr);
+        return NetworkSocketPosix::V6AddressToString(addr.ipv6);
 #else
-	this->address=NetworkSocketWinsock::StringToV4Address(addr);
+        return NetworkSocketWinsock::V6AddressToString(addr.ipv6);
+#endif
+    }
+#ifndef _WIN32
+    return NetworkSocketPosix::V4AddressToString(addr.ipv4);
+#else
+    return NetworkSocketWinsock::V4AddressToString(addr.ipv4);
 #endif
 }
 
-IPv4Address::IPv4Address(uint32_t addr){
-	this->address=addr;
+bool NetworkAddress::IsEmpty() const
+{
+    if (isIPv6)
+    {
+        const std::uint64_t* a = reinterpret_cast<const std::uint64_t*>(addr.ipv6);
+        return a[0] == 0LL && a[1] == 0LL;
+    }
+    return addr.ipv4 == 0;
 }
 
-IPv4Address::IPv4Address(){
-	this->address=0;
+bool NetworkAddress::PrefixMatches(const unsigned int prefix, const NetworkAddress& other) const
+{
+    if (isIPv6 != other.isIPv6)
+        return false;
+    if (!isIPv6)
+    {
+        std::uint32_t mask = 0xFFFFFFFF << (32 - prefix);
+        return (addr.ipv4 & mask) == (other.addr.ipv4 & mask);
+    }
+    return false;
 }
 
+NetworkAddress NetworkAddress::Empty()
+{
+    NetworkAddress addr;
+    addr.isIPv6 = false;
+    addr.addr.ipv4 = 0;
+    return addr;
+}
 
-std::string IPv4Address::ToString() const{
+NetworkAddress NetworkAddress::IPv4(const std::string& str)
+{
+    NetworkAddress addr;
+    addr.isIPv6 = false;
 #ifndef _WIN32
-	return NetworkSocketPosix::V4AddressToString(address);
+    addr.addr.ipv4 = NetworkSocketPosix::StringToV4Address(str);
 #else
-	return NetworkSocketWinsock::V4AddressToString(address);
+    addr.addr.ipv4 = NetworkSocketWinsock::StringToV4Address(str);
+#endif
+    return addr;
+}
+
+NetworkAddress NetworkAddress::IPv4(std::uint32_t addr)
+{
+    NetworkAddress a;
+    a.isIPv6 = false;
+    a.addr.ipv4 = addr;
+    return a;
+}
+
+NetworkAddress NetworkAddress::IPv6(const std::string& str)
+{
+    NetworkAddress addr;
+    addr.isIPv6 = false;
+#ifndef _WIN32
+    NetworkSocketPosix::StringToV6Address(str, addr.addr.ipv6);
+#else
+    NetworkSocketWinsock::StringToV6Address(str, addr.addr.ipv6);
+#endif
+    return addr;
+}
+
+NetworkAddress NetworkAddress::IPv6(const std::uint8_t addr[16])
+{
+    NetworkAddress a;
+    a.isIPv6 = true;
+    std::memcpy(a.addr.ipv6, addr, 16);
+    return a;
+}
+
+bool NetworkSocket::Select(std::list<NetworkSocket*>& readFds, std::list<NetworkSocket*>& writeFds, std::list<NetworkSocket*>& errorFds, SocketSelectCanceller* canceller)
+{
+#ifndef _WIN32
+    return NetworkSocketPosix::Select(readFds, writeFds, errorFds, canceller);
+#else
+    return NetworkSocketWinsock::Select(readFds, writeFds, errorFds, canceller);
 #endif
 }
 
-bool IPv4Address::PrefixMatches(const unsigned int prefix, const NetworkAddress &other) const{
-	const IPv4Address* v4=dynamic_cast<const IPv4Address*>(&other);
-	if(v4){
-		uint32_t mask=0xFFFFFFFF << (32-prefix);
-		return (address & mask) == (v4->address & mask);
-	}
-	return false;
-}
+SocketSelectCanceller::~SocketSelectCanceller() = default;
 
-/*sockaddr &IPv4Address::ToSockAddr(uint16_t port){
-	sockaddr_in sa;
-	sa.sin_family=AF_INET;
-	sa.sin_addr=addr;
-	sa.sin_port=port;
-	return *((sockaddr *) &sa);
-}*/
-
-uint32_t IPv4Address::GetAddress() const{
-	return address;
-}
-
-bool IPv4Address::IsEmpty() const{
-	return address==0;
-}
-
-IPv6Address::IPv6Address(std::string addr){
+SocketSelectCanceller* SocketSelectCanceller::Create()
+{
 #ifndef _WIN32
-	NetworkSocketPosix::StringToV6Address(addr, this->address);
+    return new SocketSelectCancellerPosix();
 #else
-	NetworkSocketWinsock::StringToV6Address(addr, this->address);
+    return new SocketSelectCancellerWin32();
 #endif
 }
 
-IPv6Address::IPv6Address(const uint8_t* addr){
-	memcpy(address, addr, 16);
+NetworkSocketTCPObfuscated::NetworkSocketTCPObfuscated(NetworkSocket* wrapped)
+    : NetworkSocketWrapper(NetworkProtocol::TCP)
+    , m_wrapped(wrapped)
+{
 }
 
-IPv6Address::IPv6Address(){
-	memset(address, 0, 16);
+NetworkSocketTCPObfuscated::~NetworkSocketTCPObfuscated()
+{
+    delete m_wrapped;
 }
 
-std::string IPv6Address::ToString() const{
-#ifndef _WIN32
-	return NetworkSocketPosix::V6AddressToString(address);
-#else
-	return NetworkSocketWinsock::V6AddressToString(address);
-#endif
+NetworkSocket* NetworkSocketTCPObfuscated::GetWrapped()
+{
+    return m_wrapped;
 }
 
-bool IPv6Address::PrefixMatches(const unsigned int prefix, const NetworkAddress &other) const{
-	return false;
+void NetworkSocketTCPObfuscated::InitConnection()
+{
+    Buffer buf(64);
+    GenerateTCPO2States(*buf, &m_recvState, &m_sendState);
+    m_wrapped->Send(NetworkPacket
+    {
+        std::move(buf),
+        NetworkAddress::Empty(),
+        0,
+        NetworkProtocol::TCP
+    });
 }
 
-bool IPv6Address::IsEmpty() const{
-	const uint64_t* a=reinterpret_cast<const uint64_t*>(address);
-	return a[0]==0LL && a[1]==0LL;
+void NetworkSocketTCPObfuscated::Send(NetworkPacket packet)
+{
+    BufferOutputStream os(packet.data.Length() + 4);
+    std::size_t len = packet.data.Length() / 4;
+    if (len < 0x7F)
+    {
+        os.WriteUInt8(static_cast<std::uint8_t>(len));
+    }
+    else
+    {
+        os.WriteUInt8(std::uint8_t{0x7F});
+        os.WriteUInt8(static_cast<std::uint8_t>((len >>  0) & 0xFF));
+        os.WriteUInt8(static_cast<std::uint8_t>((len >>  8) & 0xFF));
+        os.WriteUInt8(static_cast<std::uint8_t>((len >> 16) & 0xFF));
+    }
+    os.WriteBytes(packet.data);
+    EncryptForTCPO2(os.GetBuffer(), os.GetLength(), &m_sendState);
+    m_wrapped->Send(NetworkPacket
+    {
+        Buffer(std::move(os)),
+        NetworkAddress::Empty(),
+        0,
+        NetworkProtocol::TCP
+    });
 }
 
-/*sockaddr &IPv6Address::ToSockAddr(uint16_t port){
-	sockaddr_in6 sa;
-	sa.sin6_family=AF_INET6;
-	sa.sin6_addr=addr;
-	sa.sin6_port=port;
-	return *((sockaddr *) &sa);
-}*/
-
-const uint8_t *IPv6Address::GetAddress() const{
-	return address;
+bool NetworkSocketTCPObfuscated::OnReadyToSend()
+{
+    LOGV("TCPO socket ready to send");
+    if (!m_initialized)
+    {
+        LOGV("Initializing TCPO2 connection");
+        m_initialized = true;
+        InitConnection();
+        m_readyToSend = true;
+        return false;
+    }
+    return m_wrapped->OnReadyToSend();
 }
 
-bool NetworkSocket::Select(std::vector<NetworkSocket *> &readFds, std::vector<NetworkSocket*> &writeFds, std::vector<NetworkSocket *> &errorFds, SocketSelectCanceller *canceller){
-#ifndef _WIN32
-	return NetworkSocketPosix::Select(readFds, writeFds, errorFds, canceller);
-#else
-	return NetworkSocketWinsock::Select(readFds, writeFds, errorFds, canceller);
-#endif
+NetworkPacket NetworkSocketTCPObfuscated::Receive(std::size_t maxLen)
+{
+    std::uint8_t len1;
+    std::size_t packetLen = 0;
+    std::size_t offset = 0;
+    std::size_t len;
+    len = m_wrapped->Receive(&len1, 1);
+    if (len <= 0)
+    {
+        return NetworkPacket::Empty();
+    }
+    EncryptForTCPO2(&len1, 1, &m_recvState);
+
+    if (len1 < 0x7F)
+    {
+        packetLen = static_cast<std::size_t>(len1) * 4;
+    }
+    else
+    {
+        std::uint8_t len2[3];
+        len = m_wrapped->Receive(len2, 3);
+        if (len <= 0)
+        {
+            return NetworkPacket::Empty();
+        }
+        EncryptForTCPO2(len2, 3, &m_recvState);
+        packetLen = ((static_cast<std::size_t>(len2[0]) <<  0) |
+                     (static_cast<std::size_t>(len2[1]) <<  8) |
+                     (static_cast<std::size_t>(len2[2]) << 16)) * 4;
+    }
+
+    if (packetLen > 1500)
+    {
+        LOGW("packet too big to fit into buffer (%u vs %u)", static_cast<unsigned>(packetLen), 1500u);
+        return NetworkPacket::Empty();
+    }
+    Buffer buf(packetLen);
+
+    while (offset < packetLen)
+    {
+        len = m_wrapped->Receive(*buf, packetLen - offset);
+        if (len <= 0)
+        {
+            return NetworkPacket::Empty();
+        }
+        offset += len;
+    }
+    EncryptForTCPO2(*buf, packetLen, &m_recvState);
+    return NetworkPacket
+    {
+        std::move(buf),
+        m_wrapped->GetConnectedAddress(),
+        m_wrapped->GetConnectedPort(),
+        NetworkProtocol::TCP
+    };
 }
 
-SocketSelectCanceller::~SocketSelectCanceller(){
-
+void NetworkSocketTCPObfuscated::Open()
+{
 }
 
-SocketSelectCanceller *SocketSelectCanceller::Create(){
-#ifndef _WIN32
-	return new SocketSelectCancellerPosix();
-#else
-	return new SocketSelectCancellerWin32();
-#endif
+void NetworkSocketTCPObfuscated::Close()
+{
+    m_wrapped->Close();
 }
 
-
-
-NetworkSocketTCPObfuscated::NetworkSocketTCPObfuscated(NetworkSocket *wrapped) : NetworkSocketWrapper(PROTO_TCP){
-	this->wrapped=wrapped;
+void NetworkSocketTCPObfuscated::Connect(const NetworkAddress& address, std::uint16_t port)
+{
+    m_wrapped->Connect(address, port);
 }
 
-NetworkSocketTCPObfuscated::~NetworkSocketTCPObfuscated(){
-	if(wrapped)
-		delete wrapped;
+bool NetworkSocketTCPObfuscated::IsFailed() const
+{
+    return m_wrapped->IsFailed();
 }
 
-NetworkSocket *NetworkSocketTCPObfuscated::GetWrapped(){
-	return wrapped;
+bool NetworkSocketTCPObfuscated::IsReadyToSend() const
+{
+    return m_readyToSend && m_wrapped->IsReadyToSend();
 }
 
-void NetworkSocketTCPObfuscated::InitConnection(){
-	unsigned char buf[64];
-	GenerateTCPO2States(buf, &recvState, &sendState);
-	wrapped->Send(buf, 64);
+NetworkSocketSOCKS5Proxy::NetworkSocketSOCKS5Proxy(NetworkSocket* tcp, NetworkSocket* udp, std::string username, std::string password)
+    : NetworkSocketWrapper(udp ? NetworkProtocol::UDP : NetworkProtocol::TCP)
+    , m_tcp(tcp)
+    , m_udp(udp)
+    , m_username(std::move(username))
+    , m_password(std::move(password))
+{
 }
 
-void NetworkSocketTCPObfuscated::Send(NetworkPacket *packet){
-	BufferOutputStream os(packet->length+4);
-	size_t len=packet->length/4;
-	if(len<0x7F){
-		os.WriteByte((unsigned char)len);
-	}else{
-		os.WriteByte(0x7F);
-		os.WriteByte((unsigned char)(len & 0xFF));
-		os.WriteByte((unsigned char)((len >> 8) & 0xFF));
-		os.WriteByte((unsigned char)((len >> 16) & 0xFF));
-	}
-	os.WriteBytes(packet->data, packet->length);
-	EncryptForTCPO2(os.GetBuffer(), os.GetLength(), &sendState);
-	wrapped->Send(os.GetBuffer(), os.GetLength());
-	//LOGD("Sent %u bytes", os.GetLength());
+NetworkSocketSOCKS5Proxy::~NetworkSocketSOCKS5Proxy()
+{
+    delete m_tcp;
 }
 
-bool NetworkSocketTCPObfuscated::OnReadyToSend(){
-	if(!initialized){
-		//LOGV("Initializing TCPO2 connection");
-		initialized=true;
-		InitConnection();
-		readyToSend=true;
-		return false;
-	}
-	return wrapped->OnReadyToSend();
+void NetworkSocketSOCKS5Proxy::Send(NetworkPacket packet)
+{
+    if (m_protocol == NetworkProtocol::TCP)
+    {
+        m_tcp->Send(std::move(packet));
+    }
+    else if (m_protocol == NetworkProtocol::UDP)
+    {
+        BufferOutputStream out(1500);
+        out.WriteInt16(0); // RSV
+        out.WriteUInt8(0); // FRAG
+        if (!packet.address.isIPv6)
+        {
+            out.WriteUInt8(1); // ATYP (IPv4)
+            out.WriteUInt32(packet.address.addr.ipv4);
+        }
+        else
+        {
+            out.WriteUInt8(4); // ATYP (IPv6)
+            out.WriteBytes(packet.address.addr.ipv6, 16);
+        }
+        out.WriteUInt16(htons(packet.port));
+        out.WriteBytes(packet.data);
+        m_udp->Send(NetworkPacket
+        {
+            Buffer(std::move(out)),
+            m_connectedAddress,
+            m_connectedPort,
+            NetworkProtocol::UDP
+        });
+    }
 }
 
-void NetworkSocketTCPObfuscated::Receive(NetworkPacket *packet){
-	unsigned char len1;
-	size_t packetLen=0;
-	size_t offset=0;
-	size_t len;
-	len=wrapped->Receive(&len1, 1);
-	if(len<=0){
-		packet->length=0;
-		return;
-	}
-	EncryptForTCPO2(&len1, 1, &recvState);
-
-	if(len1<0x7F){
-		packetLen=(size_t)len1*4;
-	}else{
-		unsigned char len2[3];
-		len=wrapped->Receive(len2, 3);
-		if(len<=0){
-			packet->length=0;
-			return;
-		}
-		EncryptForTCPO2(len2, 3, &recvState);
-		packetLen=((size_t)len2[0] | ((size_t)len2[1] << 8) | ((size_t)len2[2] << 16))*4;
-	}
-
-	if(packetLen>packet->length){
-		LOGW("packet too big to fit into buffer (%u vs %u)", (unsigned int)packetLen, (unsigned int)packet->length);
-		packet->length=0;
-		return;
-	}
-
-	while(offset<packetLen){
-		len=wrapped->Receive(packet->data+offset, packetLen-offset);
-		if(len<=0){
-			packet->length=0;
-			return;
-		}
-		offset+=len;
-	}
-	EncryptForTCPO2(packet->data, packetLen, &recvState);
-	//packet->address=&itr->address;
-	packet->length=packetLen;
-	//packet->port=itr->port;
-	packet->protocol=PROTO_TCP;
-	packet->address=wrapped->GetConnectedAddress();
-	packet->port=wrapped->GetConnectedPort();
+NetworkPacket NetworkSocketSOCKS5Proxy::Receive(std::size_t maxLen)
+{
+    if (m_protocol == NetworkProtocol::TCP)
+    {
+        NetworkPacket packet = m_tcp->Receive(0);
+        packet.address = m_connectedAddress;
+        packet.port = m_connectedPort;
+        return packet;
+    }
+    NetworkPacket p = m_udp->Receive(0);
+    if (!p.IsEmpty() && p.address == m_connectedAddress && p.port == m_connectedPort)
+    {
+        BufferInputStream in(p.data);
+        in.ReadInt16(); // RSV
+        in.ReadUInt8(); // FRAG
+        std::uint8_t atyp = in.ReadUInt8();
+        NetworkAddress address = NetworkAddress::Empty();
+        if (atyp == 1)
+        { // IPv4
+            address = NetworkAddress::IPv4(in.ReadUInt32());
+        }
+        else if (atyp == 4)
+        { // IPv6
+            std::uint8_t addr[16];
+            in.ReadBytes(addr, 16);
+            address = NetworkAddress::IPv6(addr);
+        }
+        return NetworkPacket
+        {
+            Buffer::CopyOf(p.data, in.GetOffset(), in.Remaining()),
+            address,
+            htons(in.ReadUInt16()),
+            m_protocol
+        };
+    }
+    return NetworkPacket::Empty();
 }
 
-void NetworkSocketTCPObfuscated::Open(){
-
+void NetworkSocketSOCKS5Proxy::Open()
+{
 }
 
-void NetworkSocketTCPObfuscated::Close(){
-	wrapped->Close();
+void NetworkSocketSOCKS5Proxy::Close()
+{
+    m_tcp->Close();
 }
 
-void NetworkSocketTCPObfuscated::Connect(const NetworkAddress *address, uint16_t port){
-	wrapped->Connect(address, port);
+void NetworkSocketSOCKS5Proxy::Connect(const NetworkAddress& address, std::uint16_t port)
+{
+    m_connectedAddress = address;
+    m_connectedPort = port;
 }
 
-bool NetworkSocketTCPObfuscated::IsFailed(){
-	return wrapped->IsFailed();
+NetworkSocket* NetworkSocketSOCKS5Proxy::GetWrapped()
+{
+    return m_protocol == NetworkProtocol::TCP ? m_tcp : m_udp;
 }
 
-NetworkSocketSOCKS5Proxy::NetworkSocketSOCKS5Proxy(NetworkSocket *tcp, NetworkSocket *udp, std::string username, std::string password) : NetworkSocketWrapper(udp ? PROTO_UDP : PROTO_TCP){
-	this->tcp=tcp;
-	this->udp=udp;
-	this->username=username;
-	this->password=password;
-	connectedAddress=NULL;
+void NetworkSocketSOCKS5Proxy::InitConnection()
+{
 }
 
-NetworkSocketSOCKS5Proxy::~NetworkSocketSOCKS5Proxy(){
-	delete tcp;
-	if(connectedAddress)
-		delete connectedAddress;
+bool NetworkSocketSOCKS5Proxy::IsFailed() const
+{
+    return NetworkSocket::IsFailed() || m_tcp->IsFailed();
 }
 
-void NetworkSocketSOCKS5Proxy::Send(NetworkPacket *packet){
-	if(protocol==PROTO_TCP){
-		tcp->Send(packet);
-	}else if(protocol==PROTO_UDP){
-		unsigned char buf[1500];
-		BufferOutputStream out(buf, sizeof(buf));
-		out.WriteInt16(0); // RSV
-		out.WriteByte(0); // FRAG
-		const IPv4Address* v4=dynamic_cast<IPv4Address*>(packet->address);
-		const IPv6Address* v6=dynamic_cast<IPv6Address*>(packet->address);
-		if(v4){
-			out.WriteByte(1); // ATYP (IPv4)
-			out.WriteInt32(v4->GetAddress());
-		}else{
-			out.WriteByte(4); // ATYP (IPv6)
-			out.WriteBytes((unsigned char *) v6->GetAddress(), 16);
-		}
-		out.WriteInt16(htons(packet->port));
-		out.WriteBytes(packet->data, packet->length);
-		NetworkPacket p={0};
-		p.data=buf;
-		p.length=out.GetLength();
-		p.address=connectedAddress;
-		p.port=connectedPort;
-		p.protocol=PROTO_UDP;
-		udp->Send(&p);
-	}
+NetworkAddress NetworkSocketSOCKS5Proxy::GetConnectedAddress()
+{
+    return m_connectedAddress;
 }
 
-void NetworkSocketSOCKS5Proxy::Receive(NetworkPacket *packet){
-	if(protocol==PROTO_TCP){
-		tcp->Receive(packet);
-		packet->address=connectedAddress;
-		packet->port=connectedPort;
-	}else if(protocol==PROTO_UDP){
-		unsigned char buf[1500];
-		NetworkPacket p={0};
-		p.data=buf;
-		p.length=sizeof(buf);
-		udp->Receive(&p);
-		if(p.length && p.address && *p.address==*connectedAddress && p.port==connectedPort){
-			BufferInputStream in(buf, p.length);
-			in.ReadInt16(); // RSV
-			in.ReadByte(); // FRAG
-			unsigned char atyp=in.ReadByte();
-			if(atyp==1){ // IPv4
-				lastRecvdV4=IPv4Address((uint32_t) in.ReadInt32());
-				packet->address=&lastRecvdV4;
-			}else if(atyp==4){ // IPv6
-				unsigned char addr[16];
-				in.ReadBytes(addr, 16);
-				lastRecvdV6=IPv6Address(addr);
-				packet->address=&lastRecvdV6;
-			}
-			packet->port=ntohs(in.ReadInt16());
-			if(packet->length>=in.Remaining()){
-				packet->length=in.Remaining();
-				in.ReadBytes(packet->data, in.Remaining());
-			}else{
-				packet->length=0;
-				LOGW("socks5: received packet too big");
-			}
-		}
-	}
+std::uint16_t NetworkSocketSOCKS5Proxy::GetConnectedPort()
+{
+    return m_connectedPort;
 }
 
-void NetworkSocketSOCKS5Proxy::Open(){
-
+bool NetworkSocketSOCKS5Proxy::OnReadyToSend()
+{
+    if (m_state == ConnectionState::INITIAL)
+    {
+        BufferOutputStream p(16);
+        p.WriteUInt8(std::uint8_t{5}); // VER
+        if (!m_username.empty())
+        {
+            p.WriteUInt8(std::uint8_t{2}); // NMETHODS
+            p.WriteUInt8(std::uint8_t{0}); // no auth
+            p.WriteUInt8(std::uint8_t{2}); // user/pass
+        }
+        else
+        {
+            p.WriteUInt8(std::uint8_t{1}); // NMETHODS
+            p.WriteUInt8(std::uint8_t{0}); // no auth
+        }
+        m_tcp->Send(NetworkPacket {
+            Buffer(std::move(p)),
+            NetworkAddress::Empty(),
+            0,
+            NetworkProtocol::TCP});
+        m_state = ConnectionState::WAITING_FOR_AUTH_METHOD;
+        return false;
+    }
+    return m_udp ? m_udp->OnReadyToSend() : m_tcp->OnReadyToSend();
 }
 
-void NetworkSocketSOCKS5Proxy::Close(){
-	tcp->Close();
+bool NetworkSocketSOCKS5Proxy::OnReadyToReceive()
+{
+    std::uint8_t buf[1024];
+    switch (m_state)
+    {
+    case ConnectionState::INITIAL:
+        LOGE("NetworkSocketSOCKS5Proxy: connection state Initial");
+        break;
+    case ConnectionState::CONNECTED:
+        LOGE("NetworkSocketSOCKS5Proxy: connection state Connected");
+        break;
+    case ConnectionState::WAITING_FOR_AUTH_METHOD:
+    {
+        std::size_t l = m_tcp->Receive(buf, sizeof(buf));
+        if (l < 2 || m_tcp->IsFailed())
+        {
+            m_failed = true;
+            return false;
+        }
+        BufferInputStream in(buf, l);
+        std::uint8_t ver = in.ReadUInt8();
+        std::uint8_t chosenMethod = in.ReadUInt8();
+        LOGV("socks5: VER=%02X, METHOD=%02X", ver, chosenMethod);
+        if (ver != 5)
+        {
+            LOGW("socks5: incorrect VER in response");
+            m_failed = true;
+            return false;
+        }
+        if (chosenMethod == 0)
+        {
+            // connected, no further auth needed
+            SendConnectionCommand();
+        }
+        else if (chosenMethod == 2 && !m_username.empty())
+        {
+            BufferOutputStream p(512);
+            p.WriteUInt8(std::uint8_t{1}); // VER
+            p.WriteUInt8(static_cast<std::uint8_t>(m_username.length() > 255 ? 255 : m_username.length())); // ULEN
+            p.WriteBytes(reinterpret_cast<const std::uint8_t*>(m_username.c_str()), m_username.length() > 255 ? 255 : m_username.length()); // UNAME
+            p.WriteUInt8(static_cast<std::uint8_t>(m_password.length() > 255 ? 255 : m_password.length())); // PLEN
+            p.WriteBytes(reinterpret_cast<const std::uint8_t*>(m_password.c_str()), m_password.length() > 255 ? 255 : m_password.length()); // PASSWD
+            m_tcp->Send(NetworkPacket
+            {
+                Buffer(std::move(p)),
+                NetworkAddress::Empty(),
+                0,
+                NetworkProtocol::TCP
+            });
+            m_state = ConnectionState::WAITING_FOR_AUTH_RESULT;
+        }
+        else
+        {
+            LOGW("socks5: unsupported auth method");
+            m_failed = true;
+            return false;
+        }
+        return false;
+    }
+    case ConnectionState::WAITING_FOR_AUTH_RESULT:
+    {
+        std::size_t l = m_tcp->Receive(buf, sizeof(buf));
+        if (l < 2 || m_tcp->IsFailed())
+        {
+            m_failed = true;
+            return false;
+        }
+        BufferInputStream in(buf, l);
+        std::uint8_t ver = in.ReadUInt8();
+        std::uint8_t status = in.ReadUInt8();
+        LOGV("socks5: auth response VER=%02X, STATUS=%02X", ver, status);
+        if (ver != 1)
+        {
+            LOGW("socks5: auth response VER is incorrect");
+            m_failed = true;
+            return false;
+        }
+        if (status != 0)
+        {
+            LOGW("socks5: username/password auth failed");
+            m_failed = true;
+            return false;
+        }
+        LOGV("socks5: authentication succeeded");
+        SendConnectionCommand();
+        return false;
+    }
+    case ConnectionState::WAITING_FOR_COMMAND_RESULT:
+    {
+        std::size_t l = m_tcp->Receive(buf, sizeof(buf));
+        switch (m_protocol)
+        {
+        case NetworkProtocol::TCP:
+        {
+            if (l < 2 || m_tcp->IsFailed())
+            {
+                LOGW("socks5: connect failed")
+                m_failed = true;
+                return false;
+            }
+            BufferInputStream in(buf, l);
+            std::uint8_t ver = in.ReadUInt8();
+            if (ver != 5)
+            {
+                LOGW("socks5: connect: wrong ver in response");
+                m_failed = true;
+                return false;
+            }
+            std::uint8_t rep = in.ReadUInt8();
+            if (rep != 0)
+            {
+                LOGW("socks5: connect: failed with error %02X", rep);
+                m_failed = true;
+                return false;
+            }
+            LOGV("socks5: connect succeeded");
+            m_state = ConnectionState::CONNECTED;
+            m_tcp = new NetworkSocketTCPObfuscated(m_tcp);
+            m_readyToSend = true;
+            return m_tcp->OnReadyToSend();
+        }
+        case NetworkProtocol::UDP:
+        {
+            if (l < 2 || m_tcp->IsFailed())
+            {
+                LOGW("socks5: udp associate failed");
+                m_failed = true;
+                return false;
+            }
+            try
+            {
+                BufferInputStream in(buf, l);
+                std::uint8_t ver = in.ReadUInt8();
+                std::uint8_t rep = in.ReadUInt8();
+                if (ver != 5)
+                {
+                    LOGW("socks5: udp associate: wrong ver in response");
+                    m_failed = true;
+                    return false;
+                }
+                if (rep != 0)
+                {
+                    LOGW("socks5: udp associate failed with error %02X", rep);
+                    m_failed = true;
+                    return false;
+                }
+                in.ReadUInt8(); // RSV
+                std::uint8_t atyp = in.ReadUInt8();
+                if (atyp == 1)
+                {
+                    std::uint32_t addr = in.ReadUInt32();
+                    m_connectedAddress = NetworkAddress::IPv4(addr);
+                }
+                else if (atyp == 3)
+                {
+                    std::uint8_t len = in.ReadUInt8();
+                    char domain[256];
+                    std::memset(domain, 0, sizeof(domain));
+                    in.ReadBytes(reinterpret_cast<std::uint8_t*>(domain), len);
+                    LOGD("address type is domain, address=%s", domain);
+                    m_connectedAddress = ResolveDomainName(std::string(domain));
+                    if (m_connectedAddress.IsEmpty())
+                    {
+                        LOGW("socks5: failed to resolve domain name '%s'", domain);
+                        m_failed = true;
+                        return false;
+                    }
+                }
+                else if (atyp == 4)
+                {
+                    std::uint8_t addr[16];
+                    in.ReadBytes(addr, 16);
+                    m_connectedAddress = NetworkAddress::IPv6(addr);
+                }
+                else
+                {
+                    LOGW("socks5: unknown address type %d", atyp);
+                    m_failed = true;
+                    return false;
+                }
+                m_connectedPort = ntohs(in.ReadUInt16());
+                m_state = ConnectionState::CONNECTED;
+                m_readyToSend = true;
+                LOGV("socks5: udp associate successful, given endpoint %s:%d", m_connectedAddress.ToString().c_str(), m_connectedPort);
+            }
+            catch (const std::out_of_range& exception)
+            {
+                LOGW("socks5: udp associate response parse failed.\nwhat():\n%s", exception.what());
+                m_failed = true;
+            }
+            break;
+        }
+        }
+    }
+    }
+    return m_udp ? m_udp->OnReadyToReceive() : m_tcp->OnReadyToReceive();
 }
 
-void NetworkSocketSOCKS5Proxy::Connect(const NetworkAddress *address, uint16_t port){
-	const IPv4Address* v4=dynamic_cast<const IPv4Address*>(address);
-	const IPv6Address* v6=dynamic_cast<const IPv6Address*>(address);
-	connectedAddress=v4 ? (NetworkAddress*)new IPv4Address(*v4) : (NetworkAddress*)new IPv6Address(*v6);
-	connectedPort=port;
+void NetworkSocketSOCKS5Proxy::SendConnectionCommand()
+{
+    BufferOutputStream out(1024);
+    switch (m_protocol)
+    {
+    case NetworkProtocol::TCP:
+        out.WriteUInt8(5); // VER
+        out.WriteUInt8(1); // CMD (CONNECT)
+        out.WriteUInt8(0); // RSV
+        if (!m_connectedAddress.isIPv6)
+        {
+            out.WriteUInt8(1); // ATYP (IPv4)
+            out.WriteInt32(static_cast<std::int32_t>(m_connectedAddress.addr.ipv4));
+        }
+        else
+        {
+            out.WriteUInt8(4); // ATYP (IPv6)
+            out.WriteBytes(reinterpret_cast<std::uint8_t*>(m_connectedAddress.addr.ipv6), 16);
+        }
+        out.WriteUInt16(htons(m_connectedPort)); // DST.PORT
+        break;
+    case NetworkProtocol::UDP:
+        LOGV("Sending udp associate");
+        out.WriteUInt8(5); // VER
+        out.WriteUInt8(3); // CMD (UDP ASSOCIATE)
+        out.WriteUInt8(0); // RSV
+        out.WriteUInt8(1); // ATYP (IPv4)
+        out.WriteInt32(0); // DST.ADDR
+        out.WriteInt16(0); // DST.PORT
+        break;
+    }
+    m_tcp->Send(NetworkPacket
+    {
+        Buffer(std::move(out)),
+        NetworkAddress::Empty(),
+        0,
+        NetworkProtocol::TCP
+    });
+    m_state = ConnectionState::WAITING_FOR_COMMAND_RESULT;
 }
 
-NetworkSocket *NetworkSocketSOCKS5Proxy::GetWrapped(){
-	return protocol==PROTO_TCP ? tcp : udp;
-}
-
-void NetworkSocketSOCKS5Proxy::InitConnection(){
-}
-
-bool NetworkSocketSOCKS5Proxy::IsFailed(){
-	return NetworkSocket::IsFailed() || tcp->IsFailed();
-}
-
-NetworkAddress *NetworkSocketSOCKS5Proxy::GetConnectedAddress(){
-	return connectedAddress;
-}
-
-uint16_t NetworkSocketSOCKS5Proxy::GetConnectedPort(){
-	return connectedPort;
-}
-
-bool NetworkSocketSOCKS5Proxy::OnReadyToSend(){
-	//LOGV("on ready to send, state=%d", state);
-	unsigned char buf[1024];
-	if(state==ConnectionState::Initial){
-		BufferOutputStream p(buf, sizeof(buf));
-		p.WriteByte(5); // VER
-		if(!username.empty()){
-			p.WriteByte(2); // NMETHODS
-			p.WriteByte(0); // no auth
-			p.WriteByte(2); // user/pass
-		}else{
-			p.WriteByte(1); // NMETHODS
-			p.WriteByte(0); // no auth
-		}
-		tcp->Send(buf, p.GetLength());
-		state=ConnectionState::WaitingForAuthMethod;
-		return false;
-	}
-	return udp ? udp->OnReadyToSend() : tcp->OnReadyToSend();
-}
-
-bool NetworkSocketSOCKS5Proxy::OnReadyToReceive(){
-	//LOGV("on ready to receive state=%d", state);
-	unsigned char buf[1024];
-	if(state==ConnectionState::WaitingForAuthMethod){
-		size_t l=tcp->Receive(buf, sizeof(buf));
-		if(l<2 || tcp->IsFailed()){
-			failed=true;
-			return false;
-		}
-		BufferInputStream in(buf, l);
-		unsigned char ver=in.ReadByte();
-		unsigned char chosenMethod=in.ReadByte();
-		LOGV("socks5: VER=%02X, METHOD=%02X", ver, chosenMethod);
-		if(ver!=5){
-			LOGW("socks5: incorrect VER in response");
-			failed=true;
-			return false;
-		}
-		if(chosenMethod==0){
-			// connected, no further auth needed
-			SendConnectionCommand();
-		}else if(chosenMethod==2 && !username.empty()){
-        	BufferOutputStream p(buf, sizeof(buf));
-			p.WriteByte(1); // VER
-			p.WriteByte((unsigned char)(username.length()>255 ? 255 : username.length())); // ULEN
-			p.WriteBytes((unsigned char*)username.c_str(), username.length()>255 ? 255 : username.length()); // UNAME
-			p.WriteByte((unsigned char)(password.length()>255 ? 255 : password.length())); // PLEN
-			p.WriteBytes((unsigned char*)password.c_str(), password.length()>255 ? 255 : password.length()); // PASSWD
-			tcp->Send(buf, p.GetLength());
-			state=ConnectionState::WaitingForAuthResult;
-		}else{
-			LOGW("socks5: unsupported auth method");
-			failed=true;
-			return false;
-		}
-		return false;
-	}else if(state==ConnectionState::WaitingForAuthResult){
-		size_t l=tcp->Receive(buf, sizeof(buf));
-		if(l<2 || tcp->IsFailed()){
-			failed=true;
-			return false;
-		}
-		BufferInputStream in(buf, l);
-		uint8_t ver=in.ReadByte();
-		unsigned char status=in.ReadByte();
-		LOGV("socks5: auth response VER=%02X, STATUS=%02X", ver, status);
-		if(ver!=1){
-			LOGW("socks5: auth response VER is incorrect");
-			failed=true;
-			return false;
-		}
-		if(status!=0){
-			LOGW("socks5: username/password auth failed");
-			failed=true;
-			return false;
-		}
-		LOGV("socks5: authentication succeeded");
-		SendConnectionCommand();
-		return false;
-	}else if(state==ConnectionState::WaitingForCommandResult){
-		size_t l=tcp->Receive(buf, sizeof(buf));
-		if(protocol==PROTO_TCP){
-    		if(l<2 || tcp->IsFailed()){
-    			LOGW("socks5: connect failed")
-    			failed=true;
-    			return false;
-    		}
-    		BufferInputStream in(buf, l);
-    		unsigned char ver=in.ReadByte();
-    		if(ver!=5){
-    			LOGW("socks5: connect: wrong ver in response");
-    			failed=true;
-    			return false;
-    		}
-    		unsigned char rep=in.ReadByte();
-    		if(rep!=0){
-    			LOGW("socks5: connect: failed with error %02X", rep);
-    			failed=true;
-    			return false;
-    		}
-    		LOGV("socks5: connect succeeded");
-    		state=ConnectionState::Connected;
-    		tcp=new NetworkSocketTCPObfuscated(tcp);
-    		readyToSend=true;
-    		return tcp->OnReadyToSend();
-		}else if(protocol==PROTO_UDP){
-			if(l<2 || tcp->IsFailed()){
-				LOGW("socks5: udp associate failed");
-				failed=true;
-				return false;
-			}
-			try{
-				BufferInputStream in(buf, l);
-				unsigned char ver=in.ReadByte();
-				unsigned char rep=in.ReadByte();
-				if(ver!=5){
-					LOGW("socks5: udp associate: wrong ver in response");
-					failed=true;
-					return false;
-				}
-				if(rep!=0){
-					LOGW("socks5: udp associate failed with error %02X", rep);
-					failed=true;
-					return false;
-				}
-				in.ReadByte(); // RSV
-				unsigned char atyp=in.ReadByte();
-				if(atyp==1){
-					uint32_t addr=(uint32_t) in.ReadInt32();
-					connectedAddress=new IPv4Address(addr);
-				}else if(atyp==3){
-					unsigned char len=in.ReadByte();
-					char domain[256];
-					memset(domain, 0, sizeof(domain));
-					in.ReadBytes((unsigned char*)domain, len);
-					LOGD("address type is domain, address=%s", domain);
-					connectedAddress=ResolveDomainName(std::string(domain));
-					if(!connectedAddress){
-						LOGW("socks5: failed to resolve domain name '%s'", domain);
-						failed=true;
-						return false;
-					}
-				}else if(atyp==4){
-					unsigned char addr[16];
-					in.ReadBytes(addr, 16);
-					connectedAddress=new IPv6Address(addr);
-				}else{
-					LOGW("socks5: unknown address type %d", atyp);
-					failed=true;
-					return false;
-				}
-				connectedPort=(uint16_t)ntohs(in.ReadInt16());
-        		state=ConnectionState::Connected;
-				readyToSend=true;
-				LOGV("socks5: udp associate successful, given endpoint %s:%d", connectedAddress->ToString().c_str(), connectedPort);
-			}catch(std::out_of_range& x){
-				LOGW("socks5: udp associate response parse failed");
-				failed=true;
-			}
-		}
-	}
-	return udp ? udp->OnReadyToReceive() : tcp->OnReadyToReceive();
-}
-
-void NetworkSocketSOCKS5Proxy::SendConnectionCommand(){
-	unsigned char buf[1024];
-	if(protocol==PROTO_TCP){
-		BufferOutputStream out(buf, sizeof(buf));
-		out.WriteByte(5); // VER
-		out.WriteByte(1); // CMD (CONNECT)
-		out.WriteByte(0); // RSV
-		const IPv4Address* v4=dynamic_cast<const IPv4Address*>(connectedAddress);
-		const IPv6Address* v6=dynamic_cast<const IPv6Address*>(connectedAddress);
-		if(v4){
-			out.WriteByte(1); // ATYP (IPv4)
-			out.WriteInt32(v4->GetAddress());
-		}else if(v6){
-			out.WriteByte(4); // ATYP (IPv6)
-			out.WriteBytes((unsigned char*)v6->GetAddress(), 16);
-		}else{
-			LOGW("socks5: unknown address type");
-			failed=true;
-			return;
-		}
-		out.WriteInt16(htons(connectedPort)); // DST.PORT
-		tcp->Send(buf, out.GetLength());
-		state=ConnectionState::WaitingForCommandResult;
-	}else if(protocol==PROTO_UDP){
-		LOGV("Sending udp associate");
-		BufferOutputStream out(buf, sizeof(buf));
-		out.WriteByte(5); // VER
-		out.WriteByte(3); // CMD (UDP ASSOCIATE)
-		out.WriteByte(0); // RSV
-		out.WriteByte(1); // ATYP (IPv4)
-		out.WriteInt32(0); // DST.ADDR
-		out.WriteInt16(0); // DST.PORT
-		tcp->Send(buf, out.GetLength());
-		state=ConnectionState::WaitingForCommandResult;
-	}
-}
-
-bool NetworkSocketSOCKS5Proxy::NeedSelectForSending(){
-	return state==ConnectionState::Initial || state==ConnectionState::Connected;
+bool NetworkSocketSOCKS5Proxy::NeedSelectForSending() const
+{
+    return m_state == ConnectionState::INITIAL || m_state == ConnectionState::CONNECTED;
 }
